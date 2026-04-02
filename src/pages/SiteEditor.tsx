@@ -229,7 +229,7 @@ export const SiteEditor: React.FC = () => {
           { name: 'Mobile',  width: '390px',  widthMedia: '390px' },
         ],
       },
-    });
+    } as any);
 
     editorRef.current = editor;
 
@@ -243,7 +243,7 @@ export const SiteEditor: React.FC = () => {
         const page = activePageRef.current;
         if (!page) return;
         const html = editor.getHtml();
-        const css  = editor.getCss();
+        const css  = editor.getCss() ?? '';
         const snap: Snapshot = { ts: Date.now(), label, html, css };
         setSnapshots(prev => {
           const next = [snap, ...prev].slice(0, MAX_SNAPSHOTS);
@@ -325,7 +325,7 @@ export const SiteEditor: React.FC = () => {
     const editor = editorRef.current;
     if (!editor || status !== 'ready' || !activePage) return;
     const html = editor.getHtml();
-    const css  = editor.getCss();
+    const css  = editor.getCss() ?? '';
     // Save to localStorage
     savePageContent(siteId!, activePage.key, html, css);
     setSavedPages(prev => ({ ...prev, [activePage.key]: true }));
@@ -356,7 +356,7 @@ export const SiteEditor: React.FC = () => {
     const editor = editorRef.current;
     if (!editor || !activePage) return;
     const html = editor.getHtml();
-    const css  = editor.getCss();
+    const css  = editor.getCss() ?? '';
     const full = `<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>${activePage.label}</title>\n  <style>\n${css}\n  </style>\n</head>\n<body>\n${html}\n</body>\n</html>`;
     setExportHtml(full);
   };
@@ -567,7 +567,7 @@ export const SiteEditor: React.FC = () => {
       let html: string, css: string;
       if (page.key === activePage.key) {
         html = editor.getHtml();
-        css  = editor.getCss();
+        css  = editor.getCss() ?? '';
       } else {
         const stored = getPageContent(siteId!, page.key);
         if (!stored) continue;
@@ -993,7 +993,7 @@ Always pick ONE format — never output both in the same response.`;
               fetch('/api/save-page', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ siteId, pageKey: activePage.key, pageLabel: activePage.label, html: editor.getHtml(), css: editor.getCss() }),
+                body: JSON.stringify({ siteId, pageKey: activePage.key, pageLabel: activePage.label, html: editor.getHtml(), css: editor.getCss() ?? '' }),
               }).then(() => window.open(`/sites/${siteId}/${activePage.key}.html`, '_blank'));
             }
           }}
