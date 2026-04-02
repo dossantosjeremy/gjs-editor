@@ -214,7 +214,8 @@ export const SiteEditor: React.FC = () => {
   useEffect(() => {
     if (!mountRef.current || editorRef.current || !site) return;
 
-    const editor = grapesjs.init({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const editor = (grapesjs.init as any)({
       container: mountRef.current,
       fromElement: false,
       height: '100%',
@@ -229,7 +230,7 @@ export const SiteEditor: React.FC = () => {
           { name: 'Mobile',  width: '390px',  widthMedia: '390px' },
         ],
       },
-    } as any);
+    });
 
     editorRef.current = editor;
 
