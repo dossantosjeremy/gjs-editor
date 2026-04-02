@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getSites, createSite, deleteSite, updateSite } from '../storage';
+import { getSites, createSite, deleteSite, updateSite } from '../lib/db';
+import { useAuth } from '../lib/auth';
+import { isRemote } from '../lib/supabase';
 import type { Site } from '../types';
 
 function formatDate(ts: number) {
@@ -9,31 +11,34 @@ function formatDate(ts: number) {
 
 export const SiteList: React.FC = () => {
   const navigate = useNavigate();
-  const [sites, setSites]       = useState<Site[]>(() => getSites());
+  const { signOut } = useAuth();
+  const [sites, setSites]       = useState<Site[]>([]);
   const [creating, setCreating] = useState(false);
   const [newName,  setNewName]  = useState('');
   const [newDesc,  setNewDesc]  = useState('');
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameVal,setRenameVal]= useState('');
 
-  const refresh = () => setSites(getSites());
+  const refresh = async () => setSites(await getSites());
 
-  const handleCreate = () => {
+  useEffect(() => { refresh(); }, []);
+
+  const handleCreate = async () => {
     if (!newName.trim()) return;
-    const site = createSite(newName.trim(), newDesc.trim());
+    const site = await createSite(newName.trim(), newDesc.trim());
     setNewName(''); setNewDesc(''); setCreating(false);
     navigate(`/site/${site.id}`);
   };
 
-  const handleDelete = (site: Site) => {
+  const handleDelete = async (site: Site) => {
     if (!confirm(`Delete "${site.name}"? All saved pages will be lost.`)) return;
-    deleteSite(site.id);
+    await deleteSite(site.id);
     refresh();
   };
 
-  const handleRename = (site: Site) => {
+  const handleRename = async (site: Site) => {
     if (!renameVal.trim() || renameVal.trim() === site.name) { setRenaming(null); return; }
-    updateSite(site.id, { name: renameVal.trim() });
+    await updateSite(site.id, { name: renameVal.trim() });
     setRenaming(null);
     refresh();
   };
@@ -47,15 +52,22 @@ export const SiteList: React.FC = () => {
           <span style={{ fontSize: 20, fontWeight: 700, color: '#1d1d1f', letterSpacing: '-0.02em' }}>◈ GJS Editor</span>
           <span style={{ fontSize: 11, color: '#86868b', marginTop: 2 }}>Multi-site visual editor</span>
         </div>
-        <button
-          onClick={() => setCreating(true)}
-          style={{
-            background: '#0066cc', color: '#fff', border: 'none', borderRadius: 9999,
-            padding: '8px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-          }}
-        >
-          + New Site
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {isRemote && (
+            <button
+              onClick={signOut}
+              style={{ background: 'transparent', color: '#86868b', border: '1px solid #d2d2d7', borderRadius: 9999, padding: '8px 16px', fontSize: 13, cursor: 'pointer' }}
+            >
+              Sign out
+            </button>
+          )}
+          <button
+            onClick={() => setCreating(true)}
+            style={{ background: '#0066cc', color: '#fff', border: 'none', borderRadius: 9999, padding: '8px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+          >
+            + New Site
+          </button>
+        </div>
       </div>
 
       <div style={{ maxWidth: 960, margin: '0 auto', padding: '40px 24px' }}>

@@ -7,7 +7,9 @@ import {
   getSite, updateSite, addPage, removePage,
   getPageContent, savePageContent, deletePageContent, hasPageContent,
   getPageHistory, savePageHistory, clearPageHistory,
-} from '../storage';
+  getCmsData, saveCmsData,
+} from '../lib/db';
+import type { CmsFieldType, CmsField, CmsRecord, CmsCollection, CmsData } from '../lib/db';
 import type { Site, SitePage, Snapshot } from '../types';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -55,15 +57,11 @@ export const SiteEditor: React.FC = () => {
   const { siteId }  = useParams<{ siteId: string }>();
   const navigate    = useNavigate();
 
-  const [site, setSite]           = useState<Site | null>(() => getSite(siteId!));
-  const [activePage, setActivePage] = useState<SitePage | null>(() => getSite(siteId!)?.pages[0] ?? null);
+  const [site, setSite]             = useState<Site | null>(null);
+  const [activePage, setActivePage] = useState<SitePage | null>(null);
   const [status, setStatus]         = useState<'idle' | 'loading' | 'ready'>('idle');
   const [saveLabel, setSaveLabel]   = useState('Save Page');
-  const [savedPages, setSavedPages] = useState<Record<string, boolean>>(() => {
-    const s = getSite(siteId!);
-    if (!s) return {};
-    return Object.fromEntries(s.pages.map(p => [p.key, hasPageContent(siteId!, p.key)]));
-  });
+  const [savedPages, setSavedPages] = useState<Record<string, boolean>>({});
 
   // Refs
   const mountRef           = useRef<HTMLDivElement>(null);
@@ -94,14 +92,7 @@ export const SiteEditor: React.FC = () => {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [snapshots,   setSnapshots]   = useState<Snapshot[]>([]);
 
-  // ── CMS types ────────────────────────────────────────────────────────────
-  type CmsFieldType = 'text' | 'textarea' | 'number' | 'date' | 'url' | 'image-url';
-  type CmsField = { key: string; label: string; type: CmsFieldType };
-  type CmsRecord = { id: string; [key: string]: string };
-  type CmsCollection = { label: string; fields: CmsField[]; records: CmsRecord[] };
-  type CmsData = { collections: Record<string, CmsCollection> };
-
-  // CMS state
+  // CMS state (types imported from ../lib/db)
   const [cmsOpen,         setCmsOpen]         = useState(false);
   const [cmsData,         setCmsData]         = useState<CmsData>({ collections: {} });
   const [cmsView,         setCmsView]         = useState<'list' | 'table' | 'schema'>('list');
@@ -136,17 +127,24 @@ export const SiteEditor: React.FC = () => {
   const [deployUrl,     setDeployUrl]     = useState<string | null>(null);
   const [deployError,   setDeployError]   = useState<string | null>(null);
 
-  // ── Redirect if site not found ─────────────────────────────────────────────
+  // ── Load initial site data ─────────────────────────────────────────────────
   useEffect(() => {
-    if (!getSite(siteId!)) navigate('/');
+    if (!siteId) return;
+    getSite(siteId).then(async s => {
+      if (!s) { navigate('/'); return; }
+      setSite(s);
+      setActivePage(s.pages[0] ?? null);
+      const entries = await Promise.all(s.pages.map(async p => [p.key, await hasPageContent(siteId, p.key)] as [string, boolean]));
+      setSavedPages(Object.fromEntries(entries));
+    });
   }, [siteId, navigate]);
 
   // ── Load a page into GrapesJS ─────────────────────────────────────────────
-  const loadPage = useCallback((page: SitePage) => {
+  const loadPage = useCallback(async (page: SitePage) => {
     const editor = editorRef.current;
     if (!editor) return;
 
-    const saved = getPageContent(siteId!, page.key);
+    const saved = await getPageContent(siteId!, page.key);
 
     // If we have saved content, use it immediately — no URL capture needed
     if (saved) {
@@ -248,7 +246,7 @@ export const SiteEditor: React.FC = () => {
         const snap: Snapshot = { ts: Date.now(), label, html, css };
         setSnapshots(prev => {
           const next = [snap, ...prev].slice(0, MAX_SNAPSHOTS);
-          savePageHistory(siteId!, page.key, next);
+          savePageHistory(siteId!, page.key, next); // async, fire-and-forget
           return next;
         });
       }, 3000);
@@ -303,7 +301,7 @@ export const SiteEditor: React.FC = () => {
     if (firstPage) {
       activePageRef.current = firstPage;
       setActivePage(firstPage);
-      setSnapshots(getPageHistory(siteId!, firstPage.key));
+      getPageHistory(siteId!, firstPage.key).then(setSnapshots);
       loadPage(firstPage);
     }
 
@@ -314,37 +312,36 @@ export const SiteEditor: React.FC = () => {
   }, [site, siteId, loadPage]);
 
   // ── Handlers ─────────────────────────────────────────────────────────────
-  const handleSelectPage = (page: SitePage) => {
+  const handleSelectPage = async (page: SitePage) => {
     setActivePage(page);
     activePageRef.current = page;
     setSaveLabel('Save Page');
-    setSnapshots(getPageHistory(siteId!, page.key));
+    setSnapshots(await getPageHistory(siteId!, page.key));
     loadPage(page);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const editor = editorRef.current;
     if (!editor || status !== 'ready' || !activePage) return;
     const html = editor.getHtml();
     const css  = editor.getCss() ?? '';
-    // Save to localStorage
-    savePageContent(siteId!, activePage.key, html, css);
+    await savePageContent(siteId!, activePage.key, html, css);
     setSavedPages(prev => ({ ...prev, [activePage.key]: true }));
-    setSite(getSite(siteId!));
+    setSite(await getSite(siteId!));
     setSaveLabel('✓ Saved!');
     setTimeout(() => setSaveLabel('Save Page'), 2000);
-    // Save to disk via dev server endpoint
+    // Save to disk via dev server endpoint (dev-only, fails silently in prod)
     fetch('/api/save-page', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ siteId, pageKey: activePage.key, pageLabel: activePage.label, html, css }),
-    }).catch(() => { /* non-blocking — fails silently in prod */ });
+    }).catch(() => {});
   };
 
-  const handleReset = () => {
+  const handleReset = async () => {
     if (!activePage) return;
     if (!confirm(`Reset "${activePage.label}"? Saved content will be cleared and the page reloaded.`)) return;
-    deletePageContent(siteId!, activePage.key);
+    await deletePageContent(siteId!, activePage.key);
     setSavedPages(prev => ({ ...prev, [activePage.key]: false }));
     loadPage(activePage);
   };
@@ -374,8 +371,7 @@ export const SiteEditor: React.FC = () => {
   // ── CMS helpers ──────────────────────────────────────────────────────────
   const cmsLoad = useCallback(async () => {
     if (!siteId) return;
-    const res = await fetch(`/api/cms?siteId=${siteId}`);
-    const data = await res.json();
+    const data = await getCmsData(siteId);
     setCmsData(data);
   }, [siteId]);
 
@@ -383,11 +379,7 @@ export const SiteEditor: React.FC = () => {
 
   const cmsSave = async (next: CmsData) => {
     setCmsData(next);
-    await fetch('/api/cms', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ siteId, cms: next }),
-    });
+    await saveCmsData(siteId!, next);
   };
 
   const cmsSlug = (name: string) =>
@@ -570,7 +562,7 @@ export const SiteEditor: React.FC = () => {
         html = editor.getHtml();
         css  = editor.getCss() ?? '';
       } else {
-        const stored = getPageContent(siteId!, page.key);
+        const stored = await getPageContent(siteId!, page.key);
         if (!stored) continue;
         html = stored.html;
         css  = stored.css;
@@ -603,29 +595,25 @@ export const SiteEditor: React.FC = () => {
   };
 
   // Add page
-  const handleAddPage = () => {
+  const handleAddPage = async () => {
     if (!newPageName.trim()) return;
     const key = slugify(newPageName);
-    const uniqueKey = (() => {
-      const current = getSite(siteId!)?.pages.map(p => p.key) ?? [];
-      let k = key; let i = 2;
-      while (current.includes(k)) { k = `${key}-${i}`; i++; }
-      return k;
-    })();
+    const current = site?.pages.map(p => p.key) ?? [];
+    let uniqueKey = key; let i = 2;
+    while (current.includes(uniqueKey)) { uniqueKey = `${key}-${i}`; i++; }
     const newPage: SitePage = { key: uniqueKey, label: newPageName.trim(), sourceUrl: newPageUrl.trim() || undefined };
-    addPage(siteId!, newPage);
-    setSite(getSite(siteId!));
+    await addPage(siteId!, newPage);
+    setSite(await getSite(siteId!));
     setNewPageName(''); setNewPageUrl(''); setAddPageOpen(false);
     handleSelectPage(newPage);
   };
 
   // Delete page
-  const handleDeletePage = (page: SitePage) => {
-    const currentSite = getSite(siteId!);
-    if (!currentSite || currentSite.pages.length <= 1) { alert('A site must have at least one page.'); return; }
+  const handleDeletePage = async (page: SitePage) => {
+    if (!site || site.pages.length <= 1) { alert('A site must have at least one page.'); return; }
     if (!confirm(`Remove page "${page.label}"? Saved content for this page will be lost.`)) return;
-    removePage(siteId!, page.key);
-    const updated = getSite(siteId!);
+    await removePage(siteId!, page.key);
+    const updated = await getSite(siteId!);
     setSite(updated);
     if (activePage?.key === page.key && updated?.pages[0]) handleSelectPage(updated.pages[0]);
   };
@@ -860,9 +848,9 @@ Always pick ONE format — never output both in the same response.`;
     setHistoryOpen(false);
   };
 
-  const handleClearHistory = () => {
+  const handleClearHistory = async () => {
     if (!activePage || !confirm('Clear all history for this page?')) return;
-    clearPageHistory(siteId!, activePage.key);
+    await clearPageHistory(siteId!, activePage.key);
     setSnapshots([]);
   };
 
