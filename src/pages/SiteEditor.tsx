@@ -16,6 +16,40 @@ import type { Site, SitePage, Snapshot } from '../types';
 // ── Constants ────────────────────────────────────────────────────────────────
 const MAX_SNAPSHOTS = 30;
 
+// ── Markdown → HTML ──────────────────────────────────────────────────────────
+function mdToHtml(md: string): string {
+  if (!md) return '';
+  return md
+    // Images (must come before links)
+    .replace(/!\[([^\]]*)\]\((data:[^)]+|https?:[^)]+)\)/g,
+      '<img src="$2" alt="$1" style="max-width:100%;height:auto;display:block;border-radius:8px;margin:12px 0">')
+    // Links
+    .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2" style="color:#0066cc;text-decoration:underline">$1</a>')
+    // Bold / italic
+    .replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    // Headings
+    .replace(/^### (.+)$/gm, '<h3 style="font-size:1.05rem;font-weight:700;margin:14px 0 6px;line-height:1.3">$1</h3>')
+    .replace(/^## (.+)$/gm,  '<h2 style="font-size:1.25rem;font-weight:700;margin:18px 0 8px;line-height:1.3">$1</h2>')
+    .replace(/^# (.+)$/gm,   '<h1 style="font-size:1.5rem;font-weight:700;margin:22px 0 10px;line-height:1.2">$1</h1>')
+    // HR
+    .replace(/^---+$/gm, '<hr style="border:none;border-top:1px solid #e8e8ed;margin:20px 0">')
+    // Lists
+    .replace(/^[-*] (.+)$/gm, '<li>$1</li>')
+    .replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
+    // Wrap consecutive <li> in <ul>
+    .replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul style="padding-left:1.4em;margin:8px 0;line-height:1.7">$1</ul>')
+    // Paragraphs — non-empty lines that aren't block-level HTML
+    .split('\n')
+    .map(line => {
+      if (!line.trim()) return '';
+      if (/^<(h[1-6]|ul|ol|li|hr|img|div|p|blockquote)/i.test(line.trim())) return line;
+      return `<p style="margin:6px 0;line-height:1.7">${line}</p>`;
+    })
+    .join('\n');
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function captureStyles(doc: Document): string {
@@ -627,8 +661,14 @@ export const SiteEditor: React.FC = () => {
     });
 
   // ── CMS template helpers ──────────────────────────────────────────────────
-  const renderWithTokens = (template: string, record: Record<string, string>): string =>
-    template.replace(/\{\{(\w+)\}\}/g, (_, key) => record[key] ?? '');
+  // Render a template with record data — textarea fields are parsed as markdown
+  const renderWithTokens = (template: string, record: Record<string, string>, fields?: CmsField[]): string =>
+    template.replace(/\{\{(\w+)\}\}/g, (_, key) => {
+      const val = record[key] ?? '';
+      const field = fields?.find(f => f.key === key);
+      if (field?.type === 'textarea') return mdToHtml(val);
+      return val;
+    });
 
   const defaultListTemplate = (col: CmsCollection): string => {
     const imgField  = col.fields.find(f => f.type === 'image-url')?.key;
@@ -672,7 +712,7 @@ export const SiteEditor: React.FC = () => {
     if (!activeCol) return;
     const col = cmsData.collections[activeCol];
     const template = col.recordTemplate || defaultRecordTemplate(col);
-    const html = renderWithTokens(template, record);
+    const html = renderWithTokens(template, record, col.fields);
     const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
     window.open(url, '_blank');
   };
@@ -686,6 +726,24 @@ export const SiteEditor: React.FC = () => {
     };
     setCmsData(next);
     if (siteId) await saveCmsData(siteId, next);
+
+    // Re-render any existing CMS section for this collection on the current page
+    const editor = editorRef.current;
+    if (editor && template) {
+      const col = next.collections[colKey];
+      const pageHtml = editor.getHtml() as string;
+      // Check if this collection is already on the page
+      if (pageHtml.includes(`data-cms="${colKey}"`)) {
+        const gridInner = col.records.map(r =>
+          renderWithTokens(template, { ...r, _cover: r._cover ?? '' }, col.fields)
+        ).join('\n');
+        const newSection = `<section id="cms-${colKey}" data-cms="${colKey}" style="padding:clamp(40px,6vw,80px) 0"><div style="max-width:1100px;margin:0 auto;padding:0 clamp(16px,5vw,40px)"><h2 style="font-size:clamp(1.4rem,4vw,2rem);font-weight:700;margin-bottom:24px">${col.label}</h2><div class="cms-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr));gap:24px">${gridInner}</div></div></section>`;
+        // Replace the old section in the page HTML — use RegExp so colKey is interpolated
+        const sectionRegex = new RegExp(`<section[^>]+data-cms="${colKey}"[^>]*>[\\s\\S]*?<\\/section>`);
+        const updated = pageHtml.replace(sectionRegex, newSection);
+        if (updated !== pageHtml) editor.setComponents(updated);
+      }
+    }
   };
 
   const askClaudeForTemplate = async (colKey: string, prompt: string) => {
@@ -753,44 +811,63 @@ Do not include <!DOCTYPE>, <html>, <head>, or <body> tags.`;
     if (!editor) return;
     const col = cmsData.collections[colKey];
     if (!col) return;
+
+    // Slugify a record title for use as a page-link anchor
+    const recordSlug = (r: Record<string, string>) =>
+      (r[col.fields[0]?.key ?? ''] || r.id || 'record')
+        .toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 60);
+
     const firstField  = col.fields[0]?.key ?? 'title';
-    const secondField = col.fields[1]?.key ?? null;
     const imageField  = col.fields.find(f => f.type === 'image-url')?.key ?? null;
-    const textFields  = col.fields.filter(f => f.key !== imageField && f.key !== firstField);
+    // Cover image stored in _cover field takes priority
+    const coverImg    = (r: Record<string, string>) =>
+      r._cover || (imageField ? r[imageField] : '');
+    const textFields  = col.fields.filter(f => f.type !== 'image-url' && f.key !== firstField && f.type !== 'textarea');
+    const bodyField   = col.fields.find(f => f.type === 'textarea')?.key ?? null;
 
     const renderCard = (r: Record<string, string>, extraStyle = '') => {
-      const img   = imageField && r[imageField]
-        ? `<img src="${r[imageField]}" style="width:100%;height:160px;object-fit:cover;display:block" />`
-        : '';
-      const body  = textFields.map(f => r[f.key] ? `<p style="color:#86868b;font-size:13px;margin:4px 0 0">${r[f.key]}</p>` : '').join('');
-      return `<div style="border:1px solid #d2d2d7;border-radius:12px;overflow:hidden;background:#fff${extraStyle}">${img}<div style="padding:14px"><p style="font-weight:600;color:#1d1d1f;margin:0;font-size:15px">${r[firstField] || 'Untitled'}</p>${body}</div></div>`;
+      const cover = coverImg(r);
+      const img   = cover ? `<img src="${cover}" style="width:100%;height:180px;object-fit:cover;display:block" />` : '';
+      const body  = bodyField && r[bodyField]
+        ? `<div style="color:#86868b;font-size:13px;margin:6px 0 0;line-height:1.6">${mdToHtml(r[bodyField]).slice(0, 300)}</div>`
+        : textFields.map(f => r[f.key] ? `<p style="color:#86868b;font-size:13px;margin:4px 0 0">${r[f.key]}</p>` : '').join('');
+      const slug = recordSlug(r);
+      return `<a href="${colKey}/${slug}.html" style="text-decoration:none;color:inherit;display:block;border:1px solid #d2d2d7;border-radius:12px;overflow:hidden;background:#fff;transition:box-shadow .2s${extraStyle}" onmouseover="this.style.boxShadow='0 4px 20px rgba(0,0,0,0.1)'" onmouseout="this.style.boxShadow='none'">${img}<div style="padding:16px"><p style="font-weight:700;color:#1d1d1f;margin:0;font-size:16px">${r[firstField] || 'Untitled'}</p>${body}</div></a>`;
     };
 
     let inner = '';
     if (col.records.length === 0) {
-      inner = '<p style="color:#86868b;font-size:14px">No records yet.</p>';
+      inner = '<p style="color:#86868b;font-size:14px">No records yet. Add records in the CMS panel.</p>';
     } else if (layout === 'grid') {
-      inner = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px">${col.records.map(r => renderCard(r)).join('')}</div>`;
+      inner = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr));gap:20px">${col.records.map(r => renderCard(r)).join('')}</div>`;
     } else if (layout === 'list') {
-      inner = col.records.map(r => renderCard(r, ';margin-bottom:12px')).join('');
+      inner = col.records.map(r => renderCard(r, ';margin-bottom:16px')).join('');
     } else if (layout === 'cards') {
       inner = col.records.map(r => {
-        const img  = imageField && r[imageField] ? `<img src="${r[imageField]}" style="width:100px;height:100px;object-fit:cover;border-radius:8px;flex-shrink:0" />` : '';
-        const body = textFields.map(f => r[f.key] ? `<p style="color:#86868b;font-size:13px;margin:4px 0 0">${r[f.key]}</p>` : '').join('');
-        return `<div style="display:flex;gap:16px;align-items:flex-start;border:1px solid #d2d2d7;border-radius:12px;overflow:hidden;background:#fff;margin-bottom:12px;padding:14px">${img}<div><p style="font-weight:600;color:#1d1d1f;margin:0;font-size:15px">${r[firstField] || 'Untitled'}</p>${body}</div></div>`;
+        const cover = coverImg(r);
+        const img  = cover ? `<img src="${cover}" style="width:90px;height:90px;object-fit:cover;border-radius:8px;flex-shrink:0" />` : '';
+        const desc = bodyField && r[bodyField]
+          ? `<div style="color:#86868b;font-size:13px;margin:4px 0 0">${mdToHtml(r[bodyField]).slice(0, 200)}</div>`
+          : textFields.map(f => r[f.key] ? `<p style="color:#86868b;font-size:13px;margin:4px 0 0">${r[f.key]}</p>` : '').join('');
+        const slug = recordSlug(r);
+        return `<a href="${colKey}/${slug}.html" style="display:flex;gap:16px;align-items:flex-start;border:1px solid #d2d2d7;border-radius:12px;background:#fff;margin-bottom:12px;padding:16px;text-decoration:none;color:inherit">${img}<div><p style="font-weight:700;color:#1d1d1f;margin:0;font-size:15px">${r[firstField] || 'Untitled'}</p>${desc}</div></a>`;
       }).join('');
     } else if (layout === 'table') {
       const headers = col.fields.filter(f => f.type !== 'image-url').map(f => `<th style="text-align:left;padding:10px 14px;border-bottom:2px solid #d2d2d7;font-size:12px;color:#86868b;font-weight:600;text-transform:uppercase;letter-spacing:.05em">${f.label}</th>`).join('');
       const rows    = col.records.map(r => {
-        const cells = col.fields.filter(f => f.type !== 'image-url').map(f => `<td style="padding:10px 14px;border-bottom:1px solid #f0f0f5;font-size:14px;color:#1d1d1f">${r[f.key] || ''}</td>`).join('');
-        return `<tr>${cells}</tr>`;
+        const slug = recordSlug(r);
+        const cells = col.fields.filter(f => f.type !== 'image-url').map(f => {
+          const val = f.type === 'textarea' ? mdToHtml(r[f.key] ?? '').slice(0, 200) : (r[f.key] || '');
+          return `<td style="padding:10px 14px;border-bottom:1px solid #f0f0f5;font-size:14px;color:#1d1d1f">${val}</td>`;
+        }).join('');
+        return `<tr onclick="location.href='${colKey}/${slug}.html'" style="cursor:pointer" onmouseover="this.style.background='#f5f5f7'" onmouseout="this.style.background=''">${cells}</tr>`;
       }).join('');
       inner = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #d2d2d7"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div>`;
     }
 
-    // Use custom template if set
+    // Use custom template if set — pass fields for markdown rendering
     if (col.template && col.records.length > 0) {
-      const gridInner = col.records.map(r => renderWithTokens(col.template!, r)).join('\n');
+      const gridInner = col.records.map(r => renderWithTokens(col.template!, { ...r, _cover: r._cover ?? '' }, col.fields)).join('\n');
       const snippet2 = `<section id="cms-${colKey}" data-cms="${colKey}" style="padding:clamp(40px,6vw,80px) 0"><div style="max-width:1100px;margin:0 auto;padding:0 clamp(16px,5vw,40px)"><h2 style="font-size:clamp(1.4rem,4vw,2rem);font-weight:700;margin-bottom:24px">${col.label}</h2><div class="cms-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr));gap:24px">${gridInner}</div></div></section>`;
       editor.setComponents((editor.getHtml() || '') + snippet2);
       setCmsSnippetCol(null);
