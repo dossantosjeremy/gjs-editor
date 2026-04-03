@@ -779,11 +779,18 @@ export const SiteEditor: React.FC = () => {
     setChatLoading(true);
 
     const hasSelection = !!(selected && selected !== editorRef.current?.getWrapper());
+    const fullPageHtml = editorRef.current ? (editorRef.current.getHtml() ?? '') : '';
     const system = `You are a web design assistant helping build and refine websites in GrapesJS.
 Design system: primary #0066cc, text #1d1d1f, grey #86868b, surface #f5f5f7, border #d2d2d7.
 Font: -apple-system / SF Pro. Apple-influenced minimalism — generous whitespace, tight type.
 Card radius 24px, button radius 9999px, section padding 96px top+bottom.
-${hasSelection ? `\nCurrently selected element:\n\`\`\`html\n${selectedHtml!.slice(0, 3000)}\n\`\`\`` : ''}
+
+FULL PAGE HTML (always available — use this to understand context, check contrast, audit the whole page):
+\`\`\`html
+${fullPageHtml.slice(0, 8000)}
+\`\`\`
+${hasSelection ? `\nCurrently selected element (the element the user is pointing at):
+\`\`\`html\n${selectedHtml!.slice(0, 3000)}\n\`\`\`` : '(No element selected — apply changes globally or to the relevant section.)'}
 
 ABSOLUTE RULES (apply to every single HTML output, no exceptions):
 
@@ -807,12 +814,21 @@ img,video,iframe,svg{max-width:100%;height:auto;display:block}
 
 4. BREAKPOINTS: include at minimum @media(max-width:768px) and @media(max-width:480px) in every page
 
+DECISION RULES — never ask the user to paste HTML you already have. Never ask clarifying questions when you have enough context to act. Make a decision and apply it. If something is ambiguous, pick the most reasonable interpretation, apply it, and note what you assumed.
+
 OUTPUT FORMAT — choose one:
 
-A) STYLING CHANGE (color, gradient, shadow, border, padding, etc.):
-   → Output a \`\`\`css block with ONLY the CSS properties to change. Applied directly to selected element.
+A) STYLING CHANGE — selected element only (color, shadow, border, padding):
+   → Output a \`\`\`css block with ONLY bare property:value pairs. No selectors.
+   Example: \`\`\`css\ncolor: #1d1d1f;\nbackground: #fff;\n\`\`\`
 
-B) STRUCTURAL / CONTENT CHANGE (add sections, build a page, rewrite, add nav, etc.):
+B) STYLING CHANGE — element AND its children, or a whole section:
+   → Output a \`\`\`css block with SCOPED SELECTORS so it applies to the element and descendants.
+   → Derive the selector from the selected element's class or id shown above.
+   → Use !important to override any existing inline styles.
+   Example: \`\`\`css\n.stats, .stats * { color: #ffffff !important; }\n.stats .stat-label { color: rgba(255,255,255,0.75) !important; }\n\`\`\`
+
+C) STRUCTURAL / CONTENT CHANGE (add sections, build a page, rewrite, add nav, etc.):
    → Output a \`\`\`html block with body content only (no <!DOCTYPE>, <html>, <head>, <body> tags).
    → Put ALL CSS in a <style> tag first inside the block.
 
@@ -927,7 +943,20 @@ Always pick ONE format (css or html) — never both.`;
     if (!cssText) return;
     const editor = editorRef.current;
     if (!editor) return;
-    // Parse "property: value;" pairs
+
+    // If the CSS contains selectors (any `{`), inject into the global stylesheet.
+    // This handles scoped rules like `.stats, .stats * { color: #fff }`.
+    if (cssText.includes('{')) {
+      try {
+        const existing = editor.getCss() ?? '';
+        editor.setStyle(existing + '\n' + cssText);
+      } catch (err: any) {
+        console.error('[Claude CSS Apply — global]', err.message);
+      }
+      return;
+    }
+
+    // Otherwise it's bare property:value pairs — apply to the selected element.
     const styleObj: Record<string, string> = {};
     cssText.split(';').forEach(line => {
       const colonIdx = line.indexOf(':');
@@ -946,7 +975,7 @@ Always pick ONE format (css or html) — never both.`;
         target.setStyle?.({ ...existing, ...styleObj });
       }
     } catch (err: any) {
-      console.error('[Claude CSS Apply]', err.message);
+      console.error('[Claude CSS Apply — inline]', err.message);
     }
   };
 
