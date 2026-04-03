@@ -121,12 +121,42 @@ export const SiteEditor: React.FC = () => {
   // Export modal
   const [exportHtml, setExportHtml] = useState<string | null>(null);
 
+  // Nav state preview
+  const [navForceOpen, setNavForceOpen] = useState(false);
+
+  // Code editor panel
+  const [codeEditorOpen, setCodeEditorOpen] = useState(false);
+  const [codeHtml,       setCodeHtml]       = useState('');
+  const [codeCss,        setCodeCss]        = useState('');
+  const [codeTab,        setCodeTab]        = useState<'html' | 'css'>('html');
+
   // Deploy modal
   const [deployOpen,    setDeployOpen]    = useState(false);
   const [vercelToken,   setVercelToken]   = useState(() => localStorage.getItem('vercel-token') ?? '');
   const [deployStatus,  setDeployStatus]  = useState<'idle' | 'saving' | 'deploying' | 'done' | 'error'>('idle');
   const [deployUrl,     setDeployUrl]     = useState<string | null>(null);
   const [deployError,   setDeployError]   = useState<string | null>(null);
+
+  // ── Nav force-open override ───────────────────────────────────────────────
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || status !== 'ready') return;
+    const doc: Document = editor.Canvas.getDocument();
+    const existing = doc.getElementById('--nav-force-open');
+    if (navForceOpen) {
+      if (!existing) {
+        const style = doc.createElement('style');
+        style.id = '--nav-force-open';
+        style.textContent = [
+          '.nav-links{display:flex!important;flex-direction:column!important;position:static!important;',
+          'width:100%!important;gap:12px!important;padding:16px 24px!important}',
+        ].join('');
+        doc.head.appendChild(style);
+      }
+    } else {
+      existing?.remove();
+    }
+  }, [navForceOpen, status]);
 
   // ── Load initial site data ─────────────────────────────────────────────────
   useEffect(() => {
@@ -367,6 +397,23 @@ export const SiteEditor: React.FC = () => {
     const a    = document.createElement('a');
     a.href = url; a.download = `${activePage.key}.html`; a.click();
     URL.revokeObjectURL(url);
+  };
+
+  // ── Code editor panel ────────────────────────────────────────────────────
+  const openCodeEditor = () => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    setCodeHtml(editor.getHtml());
+    setCodeCss(editor.getCss() ?? '');
+    setCodeTab('html');
+    setCodeEditorOpen(true);
+  };
+
+  const applyCodeEditorChanges = () => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.setComponents(codeHtml);
+    editor.setStyle(codeCss);
   };
 
   // ── CMS helpers ──────────────────────────────────────────────────────────
@@ -776,26 +823,33 @@ RESPONSIVENESS RULES (always apply when building pages):
 - Never use fixed pixel widths on sections — use width:100% or percentages
 - Images: width:100%;height:auto;display:block
 
-HAMBURGER MENU — CRITICAL: GrapesJS canvas does NOT reliably execute <script> tags. NEVER use JavaScript for hamburger menus. Always use the CSS-only checkbox toggle pattern:
+HAMBURGER MENU — CRITICAL: GrapesJS canvas does NOT reliably execute <script> tags. NEVER use JavaScript for hamburger menus. Use ONLY the CSS-only checkbox pattern below. COPY THIS STRUCTURE EXACTLY — do not change the element nesting:
 <style>
   #nav-toggle { display: none; }
-  .hamburger { display: none; cursor: pointer; flex-direction: column; gap: 5px; padding: 4px; }
+  .hamburger { display: none; cursor: pointer; flex-direction: column; gap: 5px; padding: 4px; background: none; border: none; }
   .hamburger span { width: 24px; height: 2px; background: currentColor; display: block; transition: 0.3s; }
-  .nav-links { display: flex; align-items: center; gap: 24px; }
+  .nav-links { display: flex; align-items: center; gap: 24px; list-style: none; margin: 0; padding: 0; }
   @media (max-width: 768px) {
     .hamburger { display: flex; }
-    .nav-links { display: none; flex-direction: column; position: absolute; top: 60px; left: 0; right: 0; background: inherit; padding: 16px 24px; gap: 12px; border-top: 1px solid rgba(0,0,0,0.1); }
-    #nav-toggle:checked ~ nav .nav-links,
-    #nav-toggle:checked + nav .nav-links { display: flex; }
-    #nav-toggle:checked ~ nav .hamburger span:nth-child(1) { transform: rotate(45deg) translate(5px,5px); }
-    #nav-toggle:checked ~ nav .hamburger span:nth-child(2) { opacity: 0; }
-    #nav-toggle:checked ~ nav .hamburger span:nth-child(3) { transform: rotate(-45deg) translate(5px,-5px); }
+    .nav-links { display: none; flex-direction: column; align-items: flex-start; position: absolute; top: 100%; left: 0; right: 0; background: inherit; padding: 16px 24px; gap: 12px; border-top: 1px solid rgba(0,0,0,0.1); z-index: 999; }
+    /* :has() works regardless of where #nav-toggle sits inside nav */
+    nav:has(#nav-toggle:checked) .nav-links { display: flex; }
+    /* Fallback: checkbox is a direct child of nav */
+    nav > #nav-toggle:checked ~ .nav-links { display: flex; }
+    nav:has(#nav-toggle:checked) .hamburger span:nth-child(1) { transform: rotate(45deg) translate(5px,5px); }
+    nav:has(#nav-toggle:checked) .hamburger span:nth-child(2) { opacity: 0; }
+    nav:has(#nav-toggle:checked) .hamburger span:nth-child(3) { transform: rotate(-45deg) translate(5px,-5px); }
   }
 </style>
-<input type="checkbox" id="nav-toggle" style="display:none">
-<nav>
+<!-- EXACT structure — keep checkbox, label, and nav-links all direct children of nav -->
+<nav style="position:relative">
+  <input type="checkbox" id="nav-toggle">
+  <div class="nav-brand">Logo</div>
   <label for="nav-toggle" class="hamburger"><span></span><span></span><span></span></label>
-  <div class="nav-links">...</div>
+  <ul class="nav-links">
+    <li><a href="#">Home</a></li>
+    <li><a href="#">About</a></li>
+  </ul>
 </nav>
 
 CONVERSATION RULE (critical): After every code block, you MUST add 1–2 sentences of natural conversation — what you did, what you noticed, or a specific follow-up suggestion. Never end your response with just a code block.
@@ -848,7 +902,7 @@ Always pick ONE format (css or html) — never both.`;
       // Directly fire the same flow as handleClaudeChat with this text
       const editor = editorRef.current;
       const html = editor ? editor.getHtml() : '';
-      const system = `You are a web design assistant. Fix the following page to work perfectly at ALL viewport widths — from 320px to 4K — with zero horizontal scrolling. Rules: (1) Add *,*::before,*::after{box-sizing:border-box} and html,body{overflow-x:hidden;width:100%;max-width:100%} and img{max-width:100%;height:auto} as the very first CSS. (2) Replace all fixed pixel widths with %, max-width, or minmax(). (3) Use clamp() for all font sizes. (4) Use repeat(auto-fit,minmax(min(280px,100%),1fr)) for any grid. (5) CSS-only checkbox hamburger for navbars. (6) Include @media(max-width:768px) and @media(max-width:480px). Output a \`\`\`html block with the complete fixed page. After the code block, briefly describe what you fixed.\n\nCurrent page HTML:\n\`\`\`html\n${html.slice(0, 12000)}\n\`\`\``;
+      const system = `You are a web design assistant. Fix the following page to work perfectly at ALL viewport widths — from 320px to 4K — with zero horizontal scrolling. Rules: (1) Add *,*::before,*::after{box-sizing:border-box} and html,body{overflow-x:hidden;width:100%;max-width:100%} and img{max-width:100%;height:auto} as the very first CSS. (2) Replace all fixed pixel widths with %, max-width, or minmax(). (3) Use clamp() for all font sizes. (4) Use repeat(auto-fit,minmax(min(280px,100%),1fr)) for any grid. (5) CSS-only checkbox hamburger: place <input type="checkbox" id="nav-toggle">, <label for="nav-toggle" class="hamburger">, and <ul class="nav-links"> as DIRECT children of <nav>. Use nav:has(#nav-toggle:checked) .nav-links{display:flex} and nav > #nav-toggle:checked ~ .nav-links{display:flex} (fallback). Never use JavaScript. (6) Include @media(max-width:768px) and @media(max-width:480px). Output a \`\`\`html block with the complete fixed page. After the code block, briefly describe what you fixed.\n\nCurrent page HTML:\n\`\`\`html\n${html.slice(0, 12000)}\n\`\`\``;
       const userMsg: ChatMsg = { role: 'user', content: prompt };
       setChatMsgs(prev => [...prev, userMsg, { role: 'assistant', content: '…' }]);
       setChatLoading(true);
@@ -1145,6 +1199,38 @@ Always pick ONE format (css or html) — never both.`;
 
         <div style={{ width: 1, height: 20, background: lightTheme ? '#d2d2d7' : '#2a2a2a', flexShrink: 0 }} />
 
+        {/* Nav open/closed toggle */}
+        <button
+          onClick={() => setNavForceOpen(o => !o)}
+          disabled={status !== 'ready'}
+          title={navForceOpen ? 'Click to preview nav CLOSED' : 'Click to preview nav OPEN — lets you visually edit nav links'}
+          style={{
+            padding: '4px 10px', borderRadius: 9999, fontSize: 11, fontWeight: 600, flexShrink: 0,
+            background: navForceOpen ? '#0c4a6e' : 'transparent',
+            color: navForceOpen ? '#7dd3fc' : (lightTheme ? '#555' : '#888'),
+            border: `1px solid ${navForceOpen ? '#0369a1' : (lightTheme ? '#c7c7cc' : '#444')}`,
+            cursor: status === 'ready' ? 'pointer' : 'not-allowed', opacity: status === 'ready' ? 1 : 0.4,
+          }}
+        >
+          {navForceOpen ? '☰ Nav: Open' : '☰ Nav: Closed'}
+        </button>
+
+        {/* Code editor */}
+        <button
+          onClick={openCodeEditor}
+          disabled={status !== 'ready'}
+          title="Edit HTML + CSS directly"
+          style={{
+            padding: '4px 10px', borderRadius: 9999, fontSize: 11, fontWeight: 600, flexShrink: 0,
+            background: codeEditorOpen ? '#1c1917' : 'transparent',
+            color: codeEditorOpen ? '#fbbf24' : (lightTheme ? '#555' : '#888'),
+            border: `1px solid ${codeEditorOpen ? '#78350f' : (lightTheme ? '#c7c7cc' : '#444')}`,
+            cursor: status === 'ready' ? 'pointer' : 'not-allowed', opacity: status === 'ready' ? 1 : 0.4,
+          }}
+        >
+          {'</>'}  Code
+        </button>
+
         {/* Make Responsive shortcut */}
         <button
           onClick={() => sendQuickPrompt('Make this page fully responsive — fix the layout for mobile, tablet, and desktop. Use CSS-only hamburger for the navbar.')}
@@ -1252,6 +1338,61 @@ Always pick ONE format (css or html) — never both.`;
                 </button>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Code editor panel (right side) ── */}
+      {codeEditorOpen && (
+        <div style={{ position: 'absolute', right: 0, top: 48, bottom: 0, width: 480, background: '#0d0d0d', borderLeft: '1px solid #2a2a2a', display: 'flex', flexDirection: 'column', zIndex: 25 }}>
+          {/* Header */}
+          <div style={{ padding: '10px 14px', borderBottom: '1px solid #2a2a2a', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ color: '#fbbf24', fontSize: 13, fontWeight: 600 }}>{'</>'}  Code Editor</span>
+              <span style={{ fontSize: 10, color: '#555' }}>{activePage?.label}</span>
+            </div>
+            <button onClick={() => setCodeEditorOpen(false)} style={{ color: '#555', background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, lineHeight: 1 }}>×</button>
+          </div>
+
+          {/* Tabs */}
+          <div style={{ display: 'flex', borderBottom: '1px solid #2a2a2a', flexShrink: 0 }}>
+            {(['html', 'css'] as const).map(tab => (
+              <button key={tab} onClick={() => setCodeTab(tab)} style={{
+                flex: 1, padding: '8px 0', fontSize: 12, fontWeight: 600, background: 'none', border: 'none',
+                borderBottom: codeTab === tab ? '2px solid #fbbf24' : '2px solid transparent',
+                color: codeTab === tab ? '#fbbf24' : '#555', cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em',
+              }}>{tab}</button>
+            ))}
+          </div>
+
+          {/* Textarea */}
+          <textarea
+            key={codeTab}
+            value={codeTab === 'html' ? codeHtml : codeCss}
+            onChange={e => codeTab === 'html' ? setCodeHtml(e.target.value) : setCodeCss(e.target.value)}
+            spellCheck={false}
+            style={{
+              flex: 1, resize: 'none', background: '#0d0d0d', color: '#d4d4d4',
+              border: 'none', outline: 'none', padding: '14px', fontFamily: 'monospace', fontSize: 12, lineHeight: 1.6,
+              whiteSpace: 'pre', overflowX: 'auto',
+            }}
+          />
+
+          {/* Footer */}
+          <div style={{ padding: '10px 14px', borderTop: '1px solid #2a2a2a', display: 'flex', gap: 8, flexShrink: 0 }}>
+            <button
+              onClick={applyCodeEditorChanges}
+              style={{ flex: 1, padding: '8px 0', borderRadius: 8, fontSize: 12, fontWeight: 700, background: '#fbbf24', color: '#000', border: 'none', cursor: 'pointer' }}
+            >
+              ✓ Apply to canvas
+            </button>
+            <button
+              onClick={() => { const e = editorRef.current; if (e) { setCodeHtml(e.getHtml()); setCodeCss(e.getCss() ?? ''); } }}
+              style={{ padding: '8px 14px', borderRadius: 8, fontSize: 12, background: 'transparent', color: '#666', border: '1px solid #333', cursor: 'pointer' }}
+              title="Discard edits and reload from canvas"
+            >
+              ↺ Reset
+            </button>
           </div>
         </div>
       )}
