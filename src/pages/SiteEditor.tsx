@@ -128,6 +128,9 @@ export const SiteEditor: React.FC = () => {
   // Export modal
   const [exportHtml, setExportHtml] = useState<string | null>(null);
 
+  // Template mode — loads a CMS card template into the main GrapesJS canvas for visual editing
+  const [templateMode, setTemplateMode] = useState<{ colKey: string; originalHtml: string; originalCss: string } | null>(null);
+
   // Nav state preview
   const [navForceOpen, setNavForceOpen] = useState(false);
 
@@ -177,33 +180,56 @@ export const SiteEditor: React.FC = () => {
     if (lightTheme) {
       if (!el) { el = document.createElement('style'); el.id = id; document.head.appendChild(el); }
       el.textContent = `
+        /* ── GrapesJS panels ── */
         .gjs-editor{background:#e8e8ed!important}
-        .gjs-pn-panel{background:#fff!important;border-color:#d2d2d7!important}
+        .gjs-pn-panel{background:#ffffff!important;border-color:#d2d2d7!important;color:#1d1d1f!important}
         .gjs-pn-views{background:#f5f5f7!important;border-color:#d2d2d7!important}
-        .gjs-pn-views-container{background:#fff!important;border-color:#d2d2d7!important}
-        .gjs-pn-btn{color:#444!important}
-        .gjs-pn-btn.gjs-pn-active{color:#0066cc!important}
-        .gjs-pn-btn:hover{color:#1d1d1f!important}
+        .gjs-pn-views-container{background:#ffffff!important;border-color:#d2d2d7!important}
+        .gjs-pn-btn{color:#555!important}
+        .gjs-pn-btn.gjs-pn-active{color:#0066cc!important;background:rgba(0,102,204,0.08)!important}
+        .gjs-pn-btn:hover{color:#1d1d1f!important;background:#e8e8ed!important}
+        /* ── Blocks ── */
         .gjs-block-categories{background:#fff!important}
+        .gjs-block-category{border-color:#e8e8ed!important}
         .gjs-block{background:#f5f5f7!important;border-color:#d2d2d7!important;color:#1d1d1f!important}
-        .gjs-block:hover{background:#e8e8ed!important}
-        .gjs-block-category .gjs-title{background:#f5f5f7!important;color:#1d1d1f!important;border-color:#d2d2d7!important}
+        .gjs-block:hover{background:#e8e8ed!important;border-color:#0066cc!important}
+        .gjs-block-label{color:#1d1d1f!important}
+        .gjs-block-category .gjs-title{background:#f0f0f5!important;color:#1d1d1f!important;border-color:#d2d2d7!important}
+        /* ── Layers ── */
+        .gjs-layers-c,#gjs-pn-views-container{background:#fff!important}
         .gjs-layer-name{color:#1d1d1f!important}
         .gjs-layer{background:#fff!important;border-color:#e8e8ed!important}
-        .gjs-layer.gjs-selected{background:#cce0ff!important}
+        .gjs-layer.gjs-selected,.gjs-layer.gjs-selected>.gjs-layer-move{background:#dbeafe!important}
         .gjs-layer:hover{background:#f0f0f5!important}
-        .gjs-layer-count{color:#888!important}
-        .gjs-trt-trait{border-color:#e8e8ed!important}
+        .gjs-layer-count{color:#86868b!important;background:rgba(0,0,0,0.06)!important}
+        .gjs-layer-vis{color:#86868b!important}
+        .gjs-layer-caret{color:#86868b!important}
+        /* ── Traits ── */
+        .gjs-trt-trait{border-color:#e8e8ed!important;background:#fff!important}
         .gjs-trt-trait__label{color:#1d1d1f!important}
+        .gjs-trt-traits{background:#fff!important}
+        /* ── Fields / inputs ── */
         .gjs-field{background:#f5f5f7!important;color:#1d1d1f!important;border-color:#d2d2d7!important}
         .gjs-field input,.gjs-field select,.gjs-field textarea{color:#1d1d1f!important;background:#fff!important}
-        .gjs-sm-sector{border-color:#d2d2d7!important}
-        .gjs-sm-sector .gjs-sm-sector-title{background:#f5f5f7!important;color:#1d1d1f!important;border-color:#d2d2d7!important}
-        .gjs-sm-label,.gjs-sm-property__label{color:#555!important}
-        .gjs-toolbar{background:#fff!important;border-color:#d2d2d7!important}
+        .gjs-clm-tag-status,.gjs-clm-tags-btn{background:#f5f5f7!important;color:#1d1d1f!important;border-color:#d2d2d7!important}
+        /* ── Style manager ── */
+        .gjs-sm-sectors{background:#fff!important}
+        .gjs-sm-sector{border-color:#e8e8ed!important;background:#fff!important}
+        .gjs-sm-sector-title{background:#f5f5f7!important;color:#1d1d1f!important;border-color:#e8e8ed!important}
+        .gjs-sm-label{color:#555!important}
+        .gjs-sm-preview-file{border-color:#d2d2d7!important}
+        .gjs-sm-properties,.gjs-sm-property{color:#1d1d1f!important}
+        /* ── Toolbar ── */
+        .gjs-toolbar{background:#ffffff!important;border-color:#d2d2d7!important;box-shadow:0 2px 8px rgba(0,0,0,0.08)!important}
         .gjs-toolbar-item{color:#1d1d1f!important}
         .gjs-toolbar-item:hover{background:#f0f0f5!important}
-        .gjs-resizer-h,.gjs-resizer-v{background:#0066cc!important}
+        /* ── Device manager ── */
+        .gjs-device-label{color:#1d1d1f!important}
+        /* ── Editor app panels (custom) ── */
+        [data-light-panel]{background:#ffffff!important;border-color:#d2d2d7!important;color:#1d1d1f!important}
+        [data-light-panel] *{color:#1d1d1f}
+        [data-light-panel] input,[data-light-panel] select,[data-light-panel] textarea{background:#f5f5f7!important;color:#1d1d1f!important;border-color:#d2d2d7!important}
+        [data-light-panel] button{color:#555!important}
       `;
     } else {
       el?.remove();
@@ -683,6 +709,43 @@ Do not include <!DOCTYPE>, <html>, <head>, or <body> tags.`;
     } finally {
       setTemplateLoading(false);
     }
+  };
+
+  // ── Template mode (visual drag-and-drop design in main canvas) ─────────────
+  const enterTemplateMode = (colKey: string) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const col = cmsData.collections[colKey];
+    const originalHtml = editor.getHtml();
+    const originalCss  = editor.getCss() ?? '';
+    // Load the current template (or a sensible default) into the canvas
+    const tmpl = col.template || defaultListTemplate(col);
+    editor.setComponents(tmpl);
+    editor.setStyle('');
+    setTemplateMode({ colKey, originalHtml, originalCss });
+    setCmsOpen(false);
+  };
+
+  const saveTemplateMode = async () => {
+    const editor = editorRef.current;
+    if (!editor || !templateMode) return;
+    const html = editor.getHtml();
+    const css  = editor.getCss() ?? '';
+    // Merge CSS into the template via a <style> tag so it's self-contained
+    const withCss = css ? `<style>${css}</style>\n${html}` : html;
+    const col = cmsData.collections[templateMode.colKey];
+    await saveCollectionTemplate(templateMode.colKey, withCss, col.recordTemplate ?? '');
+    editor.setComponents(templateMode.originalHtml);
+    editor.setStyle(templateMode.originalCss);
+    setTemplateMode(null);
+  };
+
+  const cancelTemplateMode = () => {
+    const editor = editorRef.current;
+    if (!editor || !templateMode) return;
+    editor.setComponents(templateMode.originalHtml);
+    editor.setStyle(templateMode.originalCss);
+    setTemplateMode(null);
   };
 
   const cmsInsertSnippet = (colKey: string, layout: 'list'|'grid'|'cards'|'table') => {
@@ -1470,6 +1533,23 @@ Always pick ONE format (css or html) — never both.`;
         </button>
       </div>
 
+      {/* ── Template mode banner ── */}
+      {templateMode && (
+        <div style={{ flexShrink: 0, background: '#f59e0b', padding: '8px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 30 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 15 }}>🎨</span>
+            <div>
+              <span style={{ color: '#000', fontWeight: 700, fontSize: 13 }}>Editing card template for "{cmsData.collections[templateMode.colKey]?.label}"</span>
+              <span style={{ color: 'rgba(0,0,0,0.6)', fontSize: 11, marginLeft: 10 }}>Use drag-and-drop, Claude, and any GrapesJS tools. Tokens like <code style={{ background: 'rgba(0,0,0,0.15)', padding: '1px 5px', borderRadius: 4 }}>{'{{title}}'}</code> will be replaced with real data on insert.</span>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+            <button onClick={saveTemplateMode} style={{ padding: '6px 16px', background: '#000', color: '#f59e0b', border: 'none', borderRadius: 9999, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>💾 Save Template</button>
+            <button onClick={cancelTemplateMode} style={{ padding: '6px 14px', background: 'rgba(0,0,0,0.2)', color: '#000', border: 'none', borderRadius: 9999, fontSize: 12, cursor: 'pointer' }}>✗ Cancel</button>
+          </div>
+        </div>
+      )}
+
       {/* ── GrapesJS canvas ── */}
       <div ref={mountRef} style={{ flex: 1, overflow: 'hidden', position: 'relative' }} />
 
@@ -1522,23 +1602,23 @@ Always pick ONE format (css or html) — never both.`;
 
       {/* ── Code editor panel (right side) ── */}
       {codeEditorOpen && (
-        <div style={{ position: 'absolute', right: 0, top: 48, bottom: 0, width: 480, background: '#0d0d0d', borderLeft: '1px solid #2a2a2a', display: 'flex', flexDirection: 'column', zIndex: 25 }}>
+        <div data-light-panel={lightTheme || undefined} style={{ position: 'absolute', right: 0, top: 48, bottom: 0, width: 480, background: lightTheme ? '#fff' : '#0d0d0d', borderLeft: `1px solid ${lightTheme ? '#d2d2d7' : '#2a2a2a'}`, display: 'flex', flexDirection: 'column', zIndex: 25 }}>
           {/* Header */}
-          <div style={{ padding: '10px 14px', borderBottom: '1px solid #2a2a2a', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+          <div style={{ padding: '10px 14px', borderBottom: `1px solid ${lightTheme ? '#d2d2d7' : '#2a2a2a'}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ color: '#fbbf24', fontSize: 13, fontWeight: 600 }}>{'</>'}  Code Editor</span>
-              <span style={{ fontSize: 10, color: '#555' }}>{activePage?.label}</span>
+              <span style={{ color: '#f59e0b', fontSize: 13, fontWeight: 600 }}>{'</>'}  Code Editor</span>
+              <span style={{ fontSize: 10, color: lightTheme ? '#86868b' : '#555' }}>{activePage?.label}</span>
             </div>
-            <button onClick={() => setCodeEditorOpen(false)} style={{ color: '#555', background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, lineHeight: 1 }}>×</button>
+            <button onClick={() => setCodeEditorOpen(false)} style={{ color: lightTheme ? '#888' : '#555', background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, lineHeight: 1 }}>×</button>
           </div>
 
           {/* Tabs */}
-          <div style={{ display: 'flex', borderBottom: '1px solid #2a2a2a', flexShrink: 0 }}>
+          <div style={{ display: 'flex', borderBottom: `1px solid ${lightTheme ? '#d2d2d7' : '#2a2a2a'}`, flexShrink: 0 }}>
             {(['html', 'css'] as const).map(tab => (
               <button key={tab} onClick={() => setCodeTab(tab)} style={{
                 flex: 1, padding: '8px 0', fontSize: 12, fontWeight: 600, background: 'none', border: 'none',
-                borderBottom: codeTab === tab ? '2px solid #fbbf24' : '2px solid transparent',
-                color: codeTab === tab ? '#fbbf24' : '#555', cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em',
+                borderBottom: codeTab === tab ? '2px solid #f59e0b' : '2px solid transparent',
+                color: codeTab === tab ? '#f59e0b' : (lightTheme ? '#86868b' : '#555'), cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em',
               }}>{tab}</button>
             ))}
           </div>
@@ -1573,7 +1653,7 @@ Always pick ONE format (css or html) — never both.`;
 
       {/* ── CMS panel (left side) ── */}
       {cmsOpen && (
-        <div style={{ position: 'absolute', left: 0, top: 48, bottom: 0, width: cmsView === 'table' ? 480 : 360, background: '#111', borderRight: '1px solid #2a2a2a', display: 'flex', flexDirection: 'column', zIndex: 20, overflowY: 'auto' }}>
+        <div data-light-panel={lightTheme || undefined} style={{ position: 'absolute', left: 0, top: 48, bottom: 0, width: cmsView === 'table' || cmsView === 'template' || cmsView === 'record-template' ? 480 : 360, background: lightTheme ? '#fff' : '#111', borderRight: `1px solid ${lightTheme ? '#d2d2d7' : '#2a2a2a'}`, display: 'flex', flexDirection: 'column', zIndex: 20, overflowY: 'auto' }}>
 
           {/* Header */}
           <div style={{ padding: '12px 16px', borderBottom: '1px solid #2a2a2a', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
@@ -1662,14 +1742,17 @@ Always pick ONE format (css or html) — never both.`;
                     style={{ padding: '5px 12px', background: 'transparent', color: '#888', border: '1px solid #333', borderRadius: 9999, fontSize: 11, cursor: 'pointer' }}>⚙ Schema</button>
                   <button onClick={() => setCmsSnippetCol(cmsSnippetCol === activeCol ? null : activeCol)}
                     style={{ padding: '5px 12px', background: 'transparent', color: '#7c3aed', border: '1px solid #7c3aed', borderRadius: 9999, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{'</>'} Insert</button>
+                  <button onClick={() => enterTemplateMode(activeCol)}
+                    title="Open card template in the main canvas for drag-and-drop design"
+                    style={{ padding: '5px 12px', background: 'transparent', color: '#f59e0b', border: '1px solid #f59e0b', borderRadius: 9999, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>🎨 Design</button>
                   <button onClick={() => {
                     const col = cmsData.collections[activeCol];
-                    setCmsTemplateHtml(col.template || defaultListTemplate(col));
                     setCmsRecordTemplate(col.recordTemplate || defaultRecordTemplate(col));
                     setTemplatePrompt('');
-                    setCmsView('template');
+                    setCmsView('record-template');
                   }}
-                    style={{ padding: '5px 12px', background: 'transparent', color: '#f59e0b', border: '1px solid #f59e0b', borderRadius: 9999, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>🎨 Design</button>
+                    title="Edit the individual record page template"
+                    style={{ padding: '5px 12px', background: 'transparent', color: '#a78bfa', border: '1px solid #a78bfa', borderRadius: 9999, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>📄 Record</button>
                 </div>
 
                 {/* Snippet layout picker */}
