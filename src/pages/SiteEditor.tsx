@@ -738,10 +738,27 @@ Font: -apple-system / SF Pro. Apple-influenced minimalism — generous whitespac
 Card radius 24px, button radius 9999px, section padding 96px top+bottom.
 ${hasSelection ? `\nCurrently selected element:\n\`\`\`html\n${selectedHtml!.slice(0, 3000)}\n\`\`\`` : ''}
 
-ABSOLUTE RULES (apply to every single output):
-1. NEVER output <script> tags or any JavaScript — GrapesJS canvas does not reliably execute JS. All interactions (toggles, menus, tabs, accordions, hover states) MUST be implemented with pure CSS only: checkbox hack, :checked, :focus, :hover, :target selectors.
-2. ALWAYS make HTML output fully responsive by default — every page, every section, without being asked. Use flex-wrap, clamp(), max-width containers, @media queries.
-3. Never use fixed pixel widths on layout elements. Never use external fonts.
+ABSOLUTE RULES (apply to every single HTML output, no exceptions):
+
+1. NO JAVASCRIPT EVER — GrapesJS canvas does not execute <script> tags. All interactions (menus, toggles, tabs, accordions) MUST use pure CSS only: checkbox hack (:checked), :hover, :focus, :target.
+
+2. MANDATORY BASELINE — every HTML output MUST start with this <style> block (add it before any other styles):
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{overflow-x:hidden;width:100%;max-width:100%}
+img,video,iframe,svg{max-width:100%;height:auto;display:block}
+.container{width:100%;max-width:1200px;margin:0 auto;padding:0 clamp(16px,5vw,48px)}
+</style>
+
+3. FLUID LAYOUTS ONLY:
+- All font sizes: use clamp(min, preferred, max) — e.g. clamp(1rem, 2.5vw, 1.125rem)
+- All headings: clamp(1.5rem, 5vw, 3.5rem)
+- Never use fixed pixel widths on any block element — use %, max-width, or minmax()
+- Grids: use grid-template-columns: repeat(auto-fit, minmax(min(280px,100%), 1fr)) instead of fixed columns
+- Sections: padding: clamp(48px, 8vw, 96px) clamp(16px, 5vw, 48px)
+- Never use position:absolute on elements that would overflow at narrow widths without overflow:hidden on the parent
+
+4. BREAKPOINTS: include at minimum @media(max-width:768px) and @media(max-width:480px) in every page
 
 OUTPUT FORMAT — choose one:
 
@@ -831,7 +848,7 @@ Always pick ONE format (css or html) — never both.`;
       // Directly fire the same flow as handleClaudeChat with this text
       const editor = editorRef.current;
       const html = editor ? editor.getHtml() : '';
-      const system = `You are a web design assistant. The user has a page with the following HTML. Make it fully responsive using CSS-only techniques (no JavaScript). Use the checkbox hamburger pattern for navbars, flex-wrap for grids, clamp() for fonts, max-width containers. Output a \`\`\`html block with the complete fixed page. After the code block, briefly describe what you changed.\n\nCurrent page HTML:\n\`\`\`html\n${html.slice(0, 12000)}\n\`\`\``;
+      const system = `You are a web design assistant. Fix the following page to work perfectly at ALL viewport widths — from 320px to 4K — with zero horizontal scrolling. Rules: (1) Add *,*::before,*::after{box-sizing:border-box} and html,body{overflow-x:hidden;width:100%;max-width:100%} and img{max-width:100%;height:auto} as the very first CSS. (2) Replace all fixed pixel widths with %, max-width, or minmax(). (3) Use clamp() for all font sizes. (4) Use repeat(auto-fit,minmax(min(280px,100%),1fr)) for any grid. (5) CSS-only checkbox hamburger for navbars. (6) Include @media(max-width:768px) and @media(max-width:480px). Output a \`\`\`html block with the complete fixed page. After the code block, briefly describe what you fixed.\n\nCurrent page HTML:\n\`\`\`html\n${html.slice(0, 12000)}\n\`\`\``;
       const userMsg: ChatMsg = { role: 'user', content: prompt };
       setChatMsgs(prev => [...prev, userMsg, { role: 'assistant', content: '…' }]);
       setChatLoading(true);
