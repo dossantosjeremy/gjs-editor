@@ -747,25 +747,36 @@ B) STRUCTURAL / CONTENT CHANGE (add sections, build a page, rewrite, add nav, et
    → Output a \`\`\`html block with body content only (no <!DOCTYPE>, <html>, <head>, <body> tags).
    → Put ALL CSS in a <style> tag first inside the block. No external font imports.
 
-RESPONSIVE / HAMBURGER MENUS: When building navbars, ALWAYS include a working hamburger menu for mobile using inline JavaScript and a <style> block with @media queries. Use this pattern:
-\`\`\`
-<style>
-.nav-links { display: flex; gap: 24px; }
-.hamburger { display: none; cursor: pointer; ... }
-@media (max-width: 768px) {
-  .nav-links { display: none; flex-direction: column; position: absolute; top: 60px; left: 0; right: 0; background: #fff; padding: 16px; }
-  .nav-links.open { display: flex; }
-  .hamburger { display: block; }
-}
-</style>
-<script>
-document.querySelector('.hamburger').addEventListener('click', function() {
-  document.querySelector('.nav-links').classList.toggle('open');
-});
-</script>
-\`\`\`
+RESPONSIVENESS RULES (always apply when building pages):
+- Use max-width containers: <div style="max-width:1200px;margin:0 auto;padding:0 24px">
+- Use flexbox with flex-wrap:wrap and min-width on children instead of fixed grid columns
+- Use clamp() for font sizes: font-size:clamp(1.5rem,4vw,3rem)
+- Never use fixed pixel widths on sections — use width:100% or percentages
+- Images: width:100%;height:auto;display:block
 
-CONVERSATION RULE (critical): After every code block, you MUST add 1–2 sentences of natural conversation — what you did, what you noticed, or a specific follow-up suggestion. Never end your response with just a code block. Examples: "I kept the warm tones from the hero. Want me to add an online ordering section next?" or "The hamburger opens and closes with a smooth transition. Should I add an active state to the current page link?"
+HAMBURGER MENU — CRITICAL: GrapesJS canvas does NOT reliably execute <script> tags. NEVER use JavaScript for hamburger menus. Always use the CSS-only checkbox toggle pattern:
+<style>
+  #nav-toggle { display: none; }
+  .hamburger { display: none; cursor: pointer; flex-direction: column; gap: 5px; padding: 4px; }
+  .hamburger span { width: 24px; height: 2px; background: currentColor; display: block; transition: 0.3s; }
+  .nav-links { display: flex; align-items: center; gap: 24px; }
+  @media (max-width: 768px) {
+    .hamburger { display: flex; }
+    .nav-links { display: none; flex-direction: column; position: absolute; top: 60px; left: 0; right: 0; background: inherit; padding: 16px 24px; gap: 12px; border-top: 1px solid rgba(0,0,0,0.1); }
+    #nav-toggle:checked ~ nav .nav-links,
+    #nav-toggle:checked + nav .nav-links { display: flex; }
+    #nav-toggle:checked ~ nav .hamburger span:nth-child(1) { transform: rotate(45deg) translate(5px,5px); }
+    #nav-toggle:checked ~ nav .hamburger span:nth-child(2) { opacity: 0; }
+    #nav-toggle:checked ~ nav .hamburger span:nth-child(3) { transform: rotate(-45deg) translate(5px,-5px); }
+  }
+</style>
+<input type="checkbox" id="nav-toggle" style="display:none">
+<nav>
+  <label for="nav-toggle" class="hamburger"><span></span><span></span><span></span></label>
+  <div class="nav-links">...</div>
+</nav>
+
+CONVERSATION RULE (critical): After every code block, you MUST add 1–2 sentences of natural conversation — what you did, what you noticed, or a specific follow-up suggestion. Never end your response with just a code block.
 
 Always pick ONE format (css or html) — never both.`;
 
@@ -804,6 +815,32 @@ Always pick ONE format (css or html) — never both.`;
       });
     }
     setChatLoading(false);
+  };
+
+  // Send a predefined prompt without typing in the chat box
+  const sendQuickPrompt = (prompt: string) => {
+    setChatOpen(true);
+    setChatInput(prompt);
+    setTimeout(() => {
+      setChatInput('');
+      // Directly fire the same flow as handleClaudeChat with this text
+      const editor = editorRef.current;
+      const html = editor ? editor.getHtml() : '';
+      const system = `You are a web design assistant. The user has a page with the following HTML. Make it fully responsive using CSS-only techniques (no JavaScript). Use the checkbox hamburger pattern for navbars, flex-wrap for grids, clamp() for fonts, max-width containers. Output a \`\`\`html block with the complete fixed page. After the code block, briefly describe what you changed.\n\nCurrent page HTML:\n\`\`\`html\n${html.slice(0, 12000)}\n\`\`\``;
+      const userMsg: ChatMsg = { role: 'user', content: prompt };
+      setChatMsgs(prev => [...prev, userMsg, { role: 'assistant', content: '…' }]);
+      setChatLoading(true);
+      streamClaude([{ role: 'user', content: prompt }], system, (partial) => {
+        setChatMsgs(prev => { const next = [...prev]; next[next.length - 1] = { role: 'assistant', content: partial }; return next; });
+      }).then(reply => {
+        setChatMsgs(prev => { const next = [...prev]; next[next.length - 1] = { role: 'assistant', content: reply }; return next; });
+        setTimeout(() => { if (/```html/i.test(reply)) applyClaudeHtml(reply); }, 100);
+        setChatLoading(false);
+      }).catch(err => {
+        setChatMsgs(prev => { const next = [...prev]; next[next.length - 1] = { role: 'assistant', content: `Error: ${err.message}` }; return next; });
+        setChatLoading(false);
+      });
+    }, 50);
   };
 
   // Apply a CSS-only response to the selected element (or body if nothing selected)
@@ -1085,6 +1122,21 @@ Always pick ONE format (css or html) — never both.`;
         </button>
 
         <div style={{ width: 1, height: 20, background: lightTheme ? '#d2d2d7' : '#2a2a2a', flexShrink: 0 }} />
+
+        {/* Make Responsive shortcut */}
+        <button
+          onClick={() => sendQuickPrompt('Make this page fully responsive — fix the layout for mobile, tablet, and desktop. Use CSS-only hamburger for the navbar.')}
+          disabled={status !== 'ready' || chatLoading}
+          title="Ask Claude to make the page responsive"
+          style={{
+            padding: '4px 10px', borderRadius: 9999, fontSize: 11, fontWeight: 600, flexShrink: 0,
+            background: 'transparent', color: '#a78bfa',
+            border: '1px solid #4c1d95', cursor: status === 'ready' && !chatLoading ? 'pointer' : 'not-allowed',
+            opacity: status === 'ready' && !chatLoading ? 1 : 0.4,
+          }}
+        >
+          ⊡ Responsive
+        </button>
 
         {/* Claude */}
         <button
