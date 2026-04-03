@@ -1764,7 +1764,7 @@ Always pick ONE format (css or html) — never both.`;
             <span style={{ fontSize: 15 }}>{templateMode.isRecord ? '📄' : '🎨'}</span>
             <div>
               <span style={{ color: '#000', fontWeight: 700, fontSize: 13 }}>{templateMode.isRecord ? '📄 Editing record page for' : '🎨 Editing card template for'} "{cmsData.collections[templateMode.colKey]?.label}"</span>
-              <span style={{ color: 'rgba(0,0,0,0.6)', fontSize: 11, marginLeft: 10 }}>{templateMode.isRecord ? 'Design the record page. Tokens like' : 'Use drag-and-drop, Claude, and any GrapesJS tools. Tokens like'} <code style={{ background: 'rgba(0,0,0,0.15)', padding: '1px 5px', borderRadius: 4 }}>{'{{title}}'}</code> will be replaced with real data on insert.</span>
+              <span style={{ color: 'rgba(0,0,0,0.6)', fontSize: 11, marginLeft: 10 }}>Use drag-and-drop, ✦ Claude AI, and &lt;/&gt; Code — all tools available. Tokens like <code style={{ background: 'rgba(0,0,0,0.15)', padding: '1px 5px', borderRadius: 4 }}>{'{{title}}'}</code> are replaced with real data on insert.</span>
             </div>
           </div>
           <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
