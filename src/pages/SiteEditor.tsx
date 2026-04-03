@@ -619,10 +619,12 @@ export const SiteEditor: React.FC = () => {
     if (updated !== pageHtml) editor.setComponents(updated);
   };
 
-  const cmsSave = async (next: CmsData, refreshColKey?: string) => {
+  const cmsSave = async (next: CmsData) => {
     setCmsData(next);
     await saveCmsData(siteId!, next);
-    if (refreshColKey) refreshCmsSectionOnPage(refreshColKey, next);
+    // NOTE: we intentionally do NOT auto-refresh the page section here.
+    // The page is a visual snapshot — record edits should not overwrite layout changes
+    // made in the GrapesJS canvas. Re-insert the collection to get fresh renders.
   };
 
   const cmsSlug = (name: string) =>
@@ -657,7 +659,7 @@ export const SiteEditor: React.FC = () => {
     const col = cmsData.collections[colKey];
     if (!col) return;
     const records = col.records.map(r => r.id === rid ? { ...r, [fkey]: val } : r);
-    await cmsSave({ collections: { ...cmsData.collections, [colKey]: { ...col, records } } }, colKey);
+    await cmsSave({ collections: { ...cmsData.collections, [colKey]: { ...col, records } } });
   };
 
   const cmsAddRecord = async (colKey: string) => {
@@ -666,7 +668,7 @@ export const SiteEditor: React.FC = () => {
     const newId = Date.now().toString(36);
     const empty: CmsRecord = { id: newId };
     col.fields.forEach(f => { empty[f.key] = ''; });
-    await cmsSave({ collections: { ...cmsData.collections, [colKey]: { ...col, records: [...col.records, empty] } } }, colKey);
+    await cmsSave({ collections: { ...cmsData.collections, [colKey]: { ...col, records: [...col.records, empty] } } });
     const firstText = col.fields.find(f => f.type !== 'image-url' && f.type !== 'textarea');
     if (firstText) { setEditingCell({ rid: newId, fkey: firstText.key }); setCellDraft(''); }
   };
@@ -683,7 +685,7 @@ export const SiteEditor: React.FC = () => {
     const col = cmsData.collections[colKey];
     if (!col) return;
     const records = col.records.map(r => r.id === recordModal.id ? { ...r, ...modalDraft } : r);
-    await cmsSave({ collections: { ...cmsData.collections, [colKey]: { ...col, records } } }, colKey);
+    await cmsSave({ collections: { ...cmsData.collections, [colKey]: { ...col, records } } });
     setRecordModal(null);
   };
 
@@ -713,7 +715,7 @@ export const SiteEditor: React.FC = () => {
     const next: CmsData = {
       collections: { ...cmsData.collections, [colKey]: { ...col, records: col.records.filter(r => r.id !== recordId) } },
     };
-    await cmsSave(next, colKey);
+    await cmsSave(next);
   };
 
   const cmsReorderRecord = async (colKey: string, recordId: string, dir: -1 | 1) => {
@@ -724,7 +726,7 @@ export const SiteEditor: React.FC = () => {
     if (newIdx < 0 || newIdx >= col.records.length) return;
     const records = [...col.records];
     [records[idx], records[newIdx]] = [records[newIdx], records[idx]];
-    await cmsSave({ collections: { ...cmsData.collections, [colKey]: { ...col, records } } }, colKey);
+    await cmsSave({ collections: { ...cmsData.collections, [colKey]: { ...col, records } } });
   };
 
   const compressImage = (dataUrl: string): Promise<string> =>
@@ -784,11 +786,12 @@ export const SiteEditor: React.FC = () => {
       `.record-body{max-width:760px;margin:0 auto;padding:40px 24px}`,
       `h1{font-size:clamp(1.8rem,5vw,3rem);font-weight:700;margin-bottom:16px}`,
       `.meta{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:32px;color:#86868b;font-size:13px}`,
+      `.meta-item:empty{display:none}`,
       `.content{font-size:16px;line-height:1.8;color:#333}</style></head><body>`,
       `<img class="record-hero" src="{{_cover}}" alt="{{${title}}}" onerror="this.style.display='none'">`,
       `<div class="record-body">`,
       `<h1>{{${title}}}</h1>`,
-      meta.length ? `<div class="meta">${meta.map(f => `<span><strong>${f.label}:</strong> {{${f.key}}}</span>`).join('')}</div>` : '',
+      meta.length ? `<div class="meta">${meta.map(f => `<span class="meta-item">{{${f.key}}}</span>`).join('')}</div>` : '',
       bodyField ? `<div class="content">{{${bodyField}}}</div>` : '',
       `</div></body></html>`,
     ].filter(Boolean).join('\n');
@@ -895,6 +898,9 @@ Design it as a clean, readable article/detail page that showcases one record.`;
     editor.setComponents(templateMode.originalHtml);
     editor.setStyle(templateMode.originalCss);
     setTemplateMode(null);
+    // Return to CMS panel at the table view
+    setCmsOpen(true);
+    setCmsView('table');
   };
 
   const cancelTemplateMode = () => {
@@ -903,6 +909,9 @@ Design it as a clean, readable article/detail page that showcases one record.`;
     editor.setComponents(templateMode.originalHtml);
     editor.setStyle(templateMode.originalCss);
     setTemplateMode(null);
+    // Return to CMS panel at the table view
+    setCmsOpen(true);
+    setCmsView('table');
   };
 
   const enterRecordTemplateMode = (colKey: string) => {
@@ -2001,7 +2010,7 @@ Always pick ONE format (css or html) — never both.`;
                       <span style={{ color: '#333', marginLeft: 4, fontSize: 9 }}>{f.type}</span>
                     </div>
                   ))}
-                  <div style={{ ...cellStyle, width: 60, minWidth: 60 }} />
+                  <div style={{ ...cellStyle, width: 76, minWidth: 76 }} />
                 </div>
 
                 {/* Rows */}
@@ -2071,13 +2080,13 @@ Always pick ONE format (css or html) — never both.`;
                         );
                       })}
                       {/* Open full editor + delete */}
-                      <div style={{ ...cellStyle, width: 60, minWidth: 60, gap: 4, flexShrink: 0, padding: '0 4px' }}>
+                      <div style={{ ...cellStyle, width: 76, minWidth: 76, gap: 4, flexShrink: 0, padding: '0 6px', justifyContent: 'center' }}>
                         <button onClick={() => { setRecordModal(record); setModalDraft({ ...record }); setActiveTab(col.fields[0]?.key ?? ''); setMdPreview(false); }}
-                          title="Open record editor"
-                          style={{ padding: '3px 7px', borderRadius: 5, fontSize: 10, fontWeight: 600, background: 'transparent', color: '#7c3aed', border: '1px solid #7c3aed', cursor: 'pointer' }}>Edit</button>
+                          title="Edit record"
+                          style={{ padding: '4px 8px', borderRadius: 5, fontSize: 11, fontWeight: 700, background: 'transparent', color: '#7c3aed', border: '1px solid #7c3aed', cursor: 'pointer', lineHeight: 1 }}>✏</button>
                         <button onClick={() => cmsDeleteRecord(activeCol, record.id)}
                           title="Delete record"
-                          style={{ padding: '3px 7px', borderRadius: 5, fontSize: 10, fontWeight: 600, background: 'transparent', color: '#f87171', border: '1px solid #7f1d1d', cursor: 'pointer' }}>Del</button>
+                          style={{ padding: '4px 8px', borderRadius: 5, fontSize: 11, fontWeight: 700, background: 'transparent', color: '#f87171', border: '1px solid #7f1d1d', cursor: 'pointer', lineHeight: 1 }}>🗑</button>
                       </div>
                     </div>
                   ))}
