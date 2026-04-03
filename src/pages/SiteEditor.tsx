@@ -660,8 +660,10 @@ export const SiteEditor: React.FC = () => {
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
       body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 8000, system, messages }),
     });
-    const data = await res.json();
-    return data.content?.[0]?.text ?? data.error?.message ?? 'No response received.';
+    const text = await res.text();
+    let data: any;
+    try { data = JSON.parse(text); } catch { return `Error: ${text.slice(0, 300)}`; }
+    return data.content?.[0]?.text ?? data.error?.message ?? data.error ?? 'No response received.';
   };
 
   const handleClaudeChat = async () => {
