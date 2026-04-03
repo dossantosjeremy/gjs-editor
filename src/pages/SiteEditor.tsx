@@ -91,6 +91,7 @@ export const SiteEditor: React.FC = () => {
   // History state
   const [historyOpen, setHistoryOpen] = useState(false);
   const [snapshots,   setSnapshots]   = useState<Snapshot[]>([]);
+  const [lightTheme,  setLightTheme]  = useState(false);
 
   // CMS state (types imported from ../lib/db)
   const [cmsOpen,         setCmsOpen]         = useState(false);
@@ -737,21 +738,36 @@ Font: -apple-system / SF Pro. Apple-influenced minimalism — generous whitespac
 Card radius 24px, button radius 9999px, section padding 96px top+bottom.
 ${hasSelection ? `\nCurrently selected element:\n\`\`\`html\n${selectedHtml!.slice(0, 3000)}\n\`\`\`` : ''}
 
-OUTPUT RULES — choose the right format based on what the user is asking:
+OUTPUT RULES — choose the right format:
 
-A) STYLING CHANGE (background, color, gradient, glassmorphism, shadow, border, padding, opacity, blur, etc.):
-   → Output a \`\`\`css block containing ONLY the CSS properties to add/change.
-   → Example: \`\`\`css\nbackground: linear-gradient(135deg, #f6d365, #fda085);\nborder-radius: 24px;\n\`\`\`
-   → Do NOT output HTML. Do NOT add wrapper divs. The CSS is applied directly to the selected element.
+A) STYLING CHANGE (color, gradient, shadow, border, padding, etc.):
+   → Output a \`\`\`css block with ONLY the CSS properties to change. Applied directly to selected element.
 
-B) STRUCTURAL / CONTENT CHANGE (add sections, new elements, rewrite copy, build a page, etc.):
-   → Output a \`\`\`html block with ONLY body content (no <!DOCTYPE>, <html>, <head>, <body> tags).
-   → Put ALL CSS in a <style> tag as the very first thing inside the \`\`\`html block.
-   → Never use external font imports — system fonts only.
+B) STRUCTURAL / CONTENT CHANGE (add sections, build a page, rewrite, add nav, etc.):
+   → Output a \`\`\`html block with body content only (no <!DOCTYPE>, <html>, <head>, <body> tags).
+   → Put ALL CSS in a <style> tag first inside the block. No external font imports.
 
-When in doubt about styling vs structure: if the user says "change", "make it", "add a background", "update the color" → use \`\`\`css.
-If the user says "build", "create", "add a section", "redesign" → use \`\`\`html.
-Always pick ONE format — never output both in the same response.`;
+RESPONSIVE / HAMBURGER MENUS: When building navbars, ALWAYS include a working hamburger menu for mobile using inline JavaScript and a <style> block with @media queries. Use this pattern:
+\`\`\`
+<style>
+.nav-links { display: flex; gap: 24px; }
+.hamburger { display: none; cursor: pointer; ... }
+@media (max-width: 768px) {
+  .nav-links { display: none; flex-direction: column; position: absolute; top: 60px; left: 0; right: 0; background: #fff; padding: 16px; }
+  .nav-links.open { display: flex; }
+  .hamburger { display: block; }
+}
+</style>
+<script>
+document.querySelector('.hamburger').addEventListener('click', function() {
+  document.querySelector('.nav-links').classList.toggle('open');
+});
+</script>
+\`\`\`
+
+CONVERSATION RULE (critical): After every code block, you MUST add 1–2 sentences of natural conversation — what you did, what you noticed, or a specific follow-up suggestion. Never end your response with just a code block. Examples: "I kept the warm tones from the hero. Want me to add an online ordering section next?" or "The hamburger opens and closes with a smooth transition. Should I add an active state to the current page link?"
+
+Always pick ONE format (css or html) — never both.`;
 
     const historyMsgs = chatMsgs.map(m => ({ role: m.role, content: m.content }));
     const newMsg = { role: 'user' as const, content: apiContent.length === 1 && apiContent[0].type === 'text' ? apiContent[0].text : apiContent };
@@ -906,22 +922,22 @@ Always pick ONE format — never output both in the same response.`;
   const pages = site.pages;
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', flexDirection: 'column', background: '#1a1a1a' }}>
+    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', flexDirection: 'column', background: lightTheme ? '#e8e8ed' : '#1a1a1a' }}>
 
       {/* ── Top toolbar ── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 14px', height: 48, flexShrink: 0, background: '#111', borderBottom: '1px solid #2a2a2a' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 14px', height: 48, flexShrink: 0, background: lightTheme ? '#f5f5f7' : '#111', borderBottom: `1px solid ${lightTheme ? '#d2d2d7' : '#2a2a2a'}` }}>
 
         {/* Back */}
         <button
           onClick={() => navigate('/')}
-          style={{ color: '#555', fontSize: 12, background: 'none', border: 'none', cursor: 'pointer', paddingRight: 8, flexShrink: 0 }}
+          style={{ color: lightTheme ? '#86868b' : '#555', fontSize: 12, background: 'none', border: 'none', cursor: 'pointer', paddingRight: 8, flexShrink: 0 }}
         >
           ← Sites
         </button>
-        <span style={{ color: '#333', fontSize: 12, fontWeight: 600, flexShrink: 0, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ color: lightTheme ? '#1d1d1f' : '#999', fontSize: 12, fontWeight: 600, flexShrink: 0, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {site.name}
         </span>
-        <div style={{ width: 1, height: 20, background: '#2a2a2a', flexShrink: 0 }} />
+        <div style={{ width: 1, height: 20, background: lightTheme ? '#d2d2d7' : '#2a2a2a', flexShrink: 0 }} />
 
         {/* Page tabs */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 3, overflowX: 'auto', flex: 1, minWidth: 0 }}>
@@ -975,7 +991,7 @@ Always pick ONE format — never output both in the same response.`;
           </button>
         ))}
 
-        <div style={{ width: 1, height: 20, background: '#2a2a2a', flexShrink: 0 }} />
+        <div style={{ width: 1, height: 20, background: lightTheme ? '#d2d2d7' : '#2a2a2a', flexShrink: 0 }} />
 
         {/* Reset */}
         <button
@@ -1010,8 +1026,8 @@ Always pick ONE format — never output both in the same response.`;
           onClick={() => { setCmsOpen(o => !o); setCmsView('list'); setActiveCol(null); }}
           style={{
             padding: '0 14px', height: 28, borderRadius: 9999, fontSize: 12, fontWeight: 600,
-            background: cmsOpen ? '#7c3aed' : 'transparent', color: cmsOpen ? '#fff' : '#888',
-            border: '1px solid #444', cursor: 'pointer',
+            background: cmsOpen ? '#7c3aed' : 'transparent', color: cmsOpen ? '#fff' : (lightTheme ? '#555' : '#888'),
+            border: `1px solid ${lightTheme ? '#c7c7cc' : '#444'}`, cursor: 'pointer',
           }}
         >
           ⊞ CMS
@@ -1034,7 +1050,7 @@ Always pick ONE format — never output both in the same response.`;
           disabled={status !== 'ready'}
           style={{
             padding: '0 14px', height: 28, borderRadius: 9999, fontSize: 12, fontWeight: 600,
-            background: 'transparent', color: '#888', border: '1px solid #444',
+            background: 'transparent', color: lightTheme ? '#555' : '#888', border: `1px solid ${lightTheme ? '#c7c7cc' : '#444'}`,
             cursor: status === 'ready' ? 'pointer' : 'not-allowed', opacity: status === 'ready' ? 1 : 0.4,
           }}
         >
@@ -1060,7 +1076,7 @@ Always pick ONE format — never output both in the same response.`;
           disabled={status !== 'ready'}
           style={{
             padding: '4px 10px', borderRadius: 9999, fontSize: 11, flexShrink: 0,
-            background: 'transparent', color: '#888', border: '1px solid #2a2a2a',
+            background: 'transparent', color: lightTheme ? '#555' : '#888', border: `1px solid ${lightTheme ? '#c7c7cc' : '#2a2a2a'}`,
             cursor: status === 'ready' ? 'pointer' : 'default',
             opacity: status === 'ready' ? 1 : 0.4,
           }}
@@ -1068,7 +1084,7 @@ Always pick ONE format — never output both in the same response.`;
           Export ↓
         </button>
 
-        <div style={{ width: 1, height: 20, background: '#2a2a2a', flexShrink: 0 }} />
+        <div style={{ width: 1, height: 20, background: lightTheme ? '#d2d2d7' : '#2a2a2a', flexShrink: 0 }} />
 
         {/* Claude */}
         <button
@@ -1083,11 +1099,11 @@ Always pick ONE format — never output both in the same response.`;
           ✦ Claude{selectedLabel ? ` · ${selectedLabel}` : ''}
         </button>
 
-        <div style={{ width: 1, height: 20, background: '#2a2a2a', flexShrink: 0 }} />
+        <div style={{ width: 1, height: 20, background: lightTheme ? '#d2d2d7' : '#2a2a2a', flexShrink: 0 }} />
 
         {/* Undo / Redo */}
-        <button onClick={handleUndo} title="Undo (⌘Z)"   style={{ padding: '3px 7px', borderRadius: 6, fontSize: 13, background: 'transparent', color: '#666', border: '1px solid #2a2a2a', cursor: 'pointer', flexShrink: 0 }}>↩</button>
-        <button onClick={handleRedo} title="Redo (⌘⇧Z)"  style={{ padding: '3px 7px', borderRadius: 6, fontSize: 13, background: 'transparent', color: '#666', border: '1px solid #2a2a2a', cursor: 'pointer', flexShrink: 0 }}>↪</button>
+        <button onClick={handleUndo} title="Undo (⌘Z)"   style={{ padding: '3px 7px', borderRadius: 6, fontSize: 13, background: 'transparent', color: lightTheme ? '#555' : '#666', border: `1px solid ${lightTheme ? '#c7c7cc' : '#2a2a2a'}`, cursor: 'pointer', flexShrink: 0 }}>↩</button>
+        <button onClick={handleRedo} title="Redo (⌘⇧Z)"  style={{ padding: '3px 7px', borderRadius: 6, fontSize: 13, background: 'transparent', color: lightTheme ? '#555' : '#666', border: `1px solid ${lightTheme ? '#c7c7cc' : '#2a2a2a'}`, cursor: 'pointer', flexShrink: 0 }}>↪</button>
 
         {/* History */}
         <button
@@ -1095,11 +1111,24 @@ Always pick ONE format — never output both in the same response.`;
           style={{
             padding: '3px 9px', borderRadius: 6, fontSize: 11, fontWeight: 600, flexShrink: 0,
             background: historyOpen ? '#292524' : 'transparent',
-            color: historyOpen ? '#fbbf24' : '#666',
-            border: `1px solid ${historyOpen ? '#78350f' : '#2a2a2a'}`, cursor: 'pointer',
+            color: historyOpen ? '#fbbf24' : (lightTheme ? '#555' : '#666'),
+            border: `1px solid ${historyOpen ? '#78350f' : (lightTheme ? '#c7c7cc' : '#2a2a2a')}`, cursor: 'pointer',
           }}
         >
           🕐 {snapshots.length > 0 ? snapshots.length : ''}
+        </button>
+
+        {/* Light / Dark theme toggle */}
+        <button
+          onClick={() => setLightTheme(t => !t)}
+          title={lightTheme ? 'Switch to dark UI' : 'Switch to light UI'}
+          style={{
+            padding: '3px 9px', borderRadius: 6, fontSize: 13, flexShrink: 0,
+            background: 'transparent', color: lightTheme ? '#f59e0b' : '#666',
+            border: `1px solid ${lightTheme ? '#f59e0b' : '#2a2a2a'}`, cursor: 'pointer',
+          }}
+        >
+          {lightTheme ? '☀︎' : '◑'}
         </button>
       </div>
 
@@ -1634,7 +1663,9 @@ Always pick ONE format — never output both in the same response.`;
                 <p>Try:<br />· "Rewrite this copy to sound more confident"<br />· "Make this section more minimal"<br />· "Improve the visual hierarchy here"</p>
               </div>
             )}
-            {chatMsgs.map((msg, i) => (
+            {chatMsgs.map((msg, i) => {
+              const isStreaming = chatLoading && i === chatMsgs.length - 1 && msg.role === 'assistant';
+              return (
               <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {/* Attachment thumbnails for user messages */}
                 {msg.attachments && msg.attachments.length > 0 && (
@@ -1652,33 +1683,44 @@ Always pick ONE format — never output both in the same response.`;
                 )}
                 {(() => {
                   const hasCode = /```(html|css)/i.test(msg.content);
-                  // Strip all code blocks from displayed text
                   const displayText = msg.content.replace(/```(?:html|css)[\s\S]*?(?:```|$)/gi, '').trim();
                   const isCodeOnly = hasCode && !displayText;
                   return (
                     <>
-                      {(!isCodeOnly || msg.role === 'user') && (
-                        <div style={{ padding: '8px 12px', borderRadius: msg.role === 'user' ? '10px 10px 3px 10px' : '10px 10px 10px 3px', background: msg.role === 'user' ? '#0066cc' : '#1e1e1e', color: msg.role === 'user' ? '#fff' : '#ccc', fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                          {displayText || msg.content}
+                      {/* Show streaming indicator while assistant message is being written */}
+                      {isStreaming ? (
+                        <div style={{ padding: '8px 12px', borderRadius: '10px 10px 10px 3px', background: '#1e1e1e', color: '#ccc', fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word', display: 'flex', alignItems: 'center', gap: 8 }}>
+                          {displayText || <span style={{ color: '#555' }}>Generating…</span>}
                         </div>
-                      )}
-                      {msg.role === 'assistant' && hasCode && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <span style={{ fontSize: 11, color: '#16a34a', fontWeight: 600 }}>✓ Applied</span>
-                          <button
-                            onClick={() => /```css/i.test(msg.content) ? applyClaudeCss(msg.content) : applyClaudeHtml(msg.content)}
-                            style={{ padding: '3px 10px', borderRadius: 9999, fontSize: 10, fontWeight: 600, background: 'transparent', color: '#555', border: '1px solid #333', cursor: 'pointer' }}
-                          >
-                            Re-apply
-                          </button>
-                        </div>
+                      ) : (
+                        <>
+                          {(!isCodeOnly || msg.role === 'user') && (
+                            <div style={{ padding: '8px 12px', borderRadius: msg.role === 'user' ? '10px 10px 3px 10px' : '10px 10px 10px 3px', background: msg.role === 'user' ? '#0066cc' : '#1e1e1e', color: msg.role === 'user' ? '#fff' : '#ccc', fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                              {displayText || msg.content}
+                            </div>
+                          )}
+                          {msg.role === 'assistant' && hasCode && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{ fontSize: 11, color: '#16a34a', fontWeight: 600 }}>✓ Applied</span>
+                              <button
+                                onClick={() => /```css/i.test(msg.content) ? applyClaudeCss(msg.content) : applyClaudeHtml(msg.content)}
+                                style={{ padding: '3px 10px', borderRadius: 9999, fontSize: 10, fontWeight: 600, background: 'transparent', color: '#555', border: '1px solid #333', cursor: 'pointer' }}
+                              >
+                                Re-apply
+                              </button>
+                            </div>
+                          )}
+                        </>
                       )}
                     </>
                   );
                 })()}
               </div>
-            ))}
-            {chatLoading && <div style={{ color: '#555', fontSize: 11 }}>Claude is thinking…</div>}
+              );
+            })}
+            {chatLoading && chatMsgs[chatMsgs.length - 1]?.role !== 'assistant' && (
+              <div style={{ color: '#555', fontSize: 11 }}>Claude is thinking…</div>
+            )}
             <div ref={chatEndRef} />
           </div>
           {/* Attachment preview strip */}
