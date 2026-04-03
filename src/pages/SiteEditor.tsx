@@ -1650,17 +1650,32 @@ Always pick ONE format — never output both in the same response.`;
                     ))}
                   </div>
                 )}
-                <div style={{ padding: '8px 12px', borderRadius: msg.role === 'user' ? '10px 10px 3px 10px' : '10px 10px 10px 3px', background: msg.role === 'user' ? '#0066cc' : '#1e1e1e', color: msg.role === 'user' ? '#fff' : '#ccc', fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                  {msg.content.replace(/```html[\s\S]*?```/g, '[→ HTML block ready to apply]')}
-                </div>
-                {msg.role === 'assistant' && (/```html/i.test(msg.content) || /```css/i.test(msg.content)) && (
-                  <button
-                    onClick={() => /```css/i.test(msg.content) ? applyClaudeCss(msg.content) : applyClaudeHtml(msg.content)}
-                    style={{ alignSelf: 'flex-start', padding: '4px 12px', borderRadius: 9999, fontSize: 10, fontWeight: 600, background: '#16a34a', color: '#fff', border: 'none', cursor: 'pointer' }}
-                  >
-                    ↳ Re-apply
-                  </button>
-                )}
+                {(() => {
+                  const hasCode = /```(html|css)/i.test(msg.content);
+                  // Strip all code blocks from displayed text
+                  const displayText = msg.content.replace(/```(?:html|css)[\s\S]*?(?:```|$)/gi, '').trim();
+                  const isCodeOnly = hasCode && !displayText;
+                  return (
+                    <>
+                      {(!isCodeOnly || msg.role === 'user') && (
+                        <div style={{ padding: '8px 12px', borderRadius: msg.role === 'user' ? '10px 10px 3px 10px' : '10px 10px 10px 3px', background: msg.role === 'user' ? '#0066cc' : '#1e1e1e', color: msg.role === 'user' ? '#fff' : '#ccc', fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                          {displayText || msg.content}
+                        </div>
+                      )}
+                      {msg.role === 'assistant' && hasCode && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ fontSize: 11, color: '#16a34a', fontWeight: 600 }}>✓ Applied</span>
+                          <button
+                            onClick={() => /```css/i.test(msg.content) ? applyClaudeCss(msg.content) : applyClaudeHtml(msg.content)}
+                            style={{ padding: '3px 10px', borderRadius: 9999, fontSize: 10, fontWeight: 600, background: 'transparent', color: '#555', border: '1px solid #333', cursor: 'pointer' }}
+                          >
+                            Re-apply
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             ))}
             {chatLoading && <div style={{ color: '#555', fontSize: 11 }}>Claude is thinking…</div>}

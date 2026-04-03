@@ -225,7 +225,8 @@ ${html}
         req.on('data', (c: Buffer) => chunks.push(c));
         req.on('end', async () => {
           try {
-            const body = Buffer.concat(chunks).toString();
+            const bodyObj = JSON.parse(Buffer.concat(chunks).toString());
+            bodyObj.stream = true; // force streaming
             const upstream = await fetch('https://api.anthropic.com/v1/messages', {
               method: 'POST',
               headers: {
@@ -233,12 +234,27 @@ ${html}
                 'x-api-key': apiKey,
                 'anthropic-version': '2023-06-01',
               },
-              body,
+              body: JSON.stringify(bodyObj),
             });
-            const data = await upstream.json();
-            res.statusCode = upstream.status;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify(data));
+            if (!upstream.ok || !upstream.body) {
+              const errText = await upstream.text();
+              res.statusCode = upstream.status;
+              res.setHeader('Content-Type', 'application/json');
+              return res.end(JSON.stringify({ error: errText.slice(0, 300) }));
+            }
+            // Pipe SSE stream to client
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('X-Accel-Buffering', 'no');
+            const reader = (upstream.body as any).getReader();
+            const pump = async () => {
+              const { done, value } = await reader.read();
+              if (done) { res.end(); return; }
+              res.write(value);
+              pump();
+            };
+            pump();
           } catch (err: any) {
             res.statusCode = 500;
             res.setHeader('Content-Type', 'application/json');
