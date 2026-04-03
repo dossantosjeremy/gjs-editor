@@ -567,15 +567,15 @@ export const SiteEditor: React.FC = () => {
         renderWithTokens(col.template!, { ...r, _cover: r._cover ?? '' }, col.fields, colKey)
       ).join('\n');
     } else {
-      // Default card rendering (matches cmsInsertSnippet default)
+      // Default card rendering — class-based so GrapesJS Style Manager affects all cards
       newCards = col.records.map(r => {
         const cover = coverImg(r);
-        const img   = cover ? `<img src="${cover}" style="width:100%;height:180px;object-fit:cover;display:block" />` : '';
+        const img   = cover ? `<img src="${cover}" class="cms-card-img" onerror="this.style.display='none'" />` : '';
         const body  = bodyField && r[bodyField]
-          ? `<div style="color:#86868b;font-size:13px;margin:6px 0 0;line-height:1.6">${mdToHtml(r[bodyField]).slice(0, 300)}</div>`
-          : textFields.map(f => r[f.key] ? `<p style="color:#86868b;font-size:13px;margin:4px 0 0">${r[f.key]}</p>` : '').join('');
+          ? `<div class="cms-card-excerpt">${mdToHtml(r[bodyField]).slice(0, 300)}</div>`
+          : textFields.map(f => r[f.key] ? `<p class="cms-card-meta">${r[f.key]}</p>` : '').join('');
         const slug = rSlug(r);
-        return `<a href="${colKey}/${slug}.html" style="text-decoration:none;color:inherit;display:block;border:1px solid #d2d2d7;border-radius:12px;overflow:hidden;background:#fff;transition:box-shadow .2s" onmouseover="this.style.boxShadow='0 4px 20px rgba(0,0,0,0.1)'" onmouseout="this.style.boxShadow='none'">${img}<div style="padding:16px"><p style="font-weight:700;color:#1d1d1f;margin:0;font-size:16px">${r[firstField] || 'Untitled'}</p>${body}</div></a>`;
+        return `<a href="${colKey}/${slug}.html" class="cms-card">${img}<div class="cms-card-body"><p class="cms-card-title">${r[firstField] || 'Untitled'}</p>${body}</div></a>`;
       }).join('\n');
     }
 
@@ -734,18 +734,30 @@ export const SiteEditor: React.FC = () => {
     });
   };
 
+  // ── CMS card CSS — injected into the page so all cards share real classes ────
+  // Editing .cms-card in GrapesJS Style Manager updates every card at once.
+  const CMS_CARD_CSS = `
+.cms-card{display:block;border:1px solid #d2d2d7;border-radius:12px;overflow:hidden;background:#fff;text-decoration:none;color:inherit;transition:box-shadow 0.2s,transform 0.2s}
+.cms-card:hover{box-shadow:0 4px 20px rgba(0,0,0,0.12);transform:translateY(-2px)}
+.cms-card-img{width:100%;height:180px;object-fit:cover;display:block}
+.cms-card-img[src=""]{display:none}
+.cms-card-body{padding:16px}
+.cms-card-title{font-weight:700;color:#1d1d1f;margin:0;font-size:16px;line-height:1.3}
+.cms-card-meta{color:#86868b;font-size:13px;margin:4px 0 0}
+.cms-card-excerpt{color:#86868b;font-size:13px;margin:6px 0 0;line-height:1.6}`;
+
   const defaultListTemplate = (col: CmsCollection): string => {
     const title      = col.fields[0]?.key ?? 'title';
     const bodyField  = col.fields.find(f => f.type === 'textarea')?.key;
     const textFields = col.fields.filter(f => f.type !== 'image-url' && f.key !== title && f.type !== 'textarea');
     const body = bodyField
-      ? `<div style="color:#86868b;font-size:13px;margin:6px 0 0;line-height:1.6">{{${bodyField}}}</div>`
-      : textFields.map(f => `<p style="color:#86868b;font-size:13px;margin:4px 0 0">{{${f.key}}}</p>`).join('');
+      ? `<div class="cms-card-excerpt">{{${bodyField}}}</div>`
+      : textFields.map(f => `<p class="cms-card-meta">{{${f.key}}}</p>`).join('');
     return [
-      `<a href="{{_slug}}" style="text-decoration:none;color:inherit;display:block;border:1px solid #d2d2d7;border-radius:12px;overflow:hidden;background:#fff;transition:box-shadow .2s" onmouseover="this.style.boxShadow='0 4px 20px rgba(0,0,0,0.1)'" onmouseout="this.style.boxShadow='none'">`,
-      `<img src="{{_cover}}" alt="{{${title}}}" style="width:100%;height:180px;object-fit:cover;display:block" onerror="this.style.display='none'">`,
-      `<div style="padding:16px">`,
-      `<p style="font-weight:700;color:#1d1d1f;margin:0;font-size:16px">{{${title}}}</p>`,
+      `<a href="{{_slug}}" class="cms-card">`,
+      `<img src="{{_cover}}" class="cms-card-img" alt="{{${title}}}" onerror="this.style.display='none'">`,
+      `<div class="cms-card-body">`,
+      `<p class="cms-card-title">{{${title}}}</p>`,
       body,
       `</div>`,
       `</a>`,
@@ -844,10 +856,15 @@ Design it as a clean, readable article/detail page that showcases one record.`;
     const col = cmsData.collections[colKey];
     const originalHtml = editor.getHtml();
     const originalCss  = editor.getCss() ?? '';
-    // Load the current template (or a sensible default) into the canvas
-    const tmpl = col.template || defaultListTemplate(col);
-    editor.setComponents(tmpl);
-    editor.setStyle('');
+    // Load the current template — strip any embedded <style> tag from old format
+    const rawTmpl = col.template || defaultListTemplate(col);
+    const styleInTmpl = rawTmpl.match(/^<style[^>]*>([\s\S]*?)<\/style>\s*/i);
+    const templateHtml = styleInTmpl ? rawTmpl.slice(styleInTmpl[0].length) : rawTmpl;
+    editor.setComponents(templateHtml);
+    // Load page CSS into the canvas so .cms-card class is editable in Style Manager.
+    // If the page doesn't have .cms-card yet, inject the defaults.
+    const canvasCss = originalCss.includes('.cms-card') ? originalCss : (originalCss + CMS_CARD_CSS);
+    editor.setStyle(canvasCss);
     setTemplateMode({ colKey, originalHtml, originalCss });
     setCmsOpen(false);
   };
@@ -870,12 +887,12 @@ Design it as a clean, readable article/detail page that showcases one record.`;
       ].join('\n');
       await saveCollectionTemplate(templateMode.colKey, col.template ?? '', fullTemplate);
     } else {
-      // Card template
-      const withCss = css ? `<style>${css}</style>\n${html}` : html;
-      await saveCollectionTemplate(templateMode.colKey, withCss, col.recordTemplate ?? '');
+      // Card template — save HTML only. CSS lives in the page (shared .cms-card class).
+      await saveCollectionTemplate(templateMode.colKey, html, col.recordTemplate ?? '');
     }
     editor.setComponents(templateMode.originalHtml);
-    editor.setStyle(templateMode.originalCss);
+    // Restore page with the updated CSS (includes any .cms-card edits made in template mode)
+    editor.setStyle(css);
     setTemplateMode(null);
     // Return to CMS panel at the table view
     setCmsOpen(true);
@@ -960,6 +977,13 @@ Design it as a clean, readable article/detail page that showcases one record.`;
     if (!editor) return;
     const col = cmsData.collections[colKey];
     if (!col) return;
+
+    // Inject .cms-card CSS into the page if not already present.
+    // This makes all card styling class-based so GrapesJS can edit one class = all cards update.
+    const existingCss = editor.getCss() ?? '';
+    if (!existingCss.includes('.cms-card')) {
+      editor.setStyle(existingCss + CMS_CARD_CSS);
+    }
 
     // Slugify a record title for use as a page-link anchor
     const recordSlug = (r: Record<string, string>) => {
