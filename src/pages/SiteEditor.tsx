@@ -738,14 +738,19 @@ Font: -apple-system / SF Pro. Apple-influenced minimalism — generous whitespac
 Card radius 24px, button radius 9999px, section padding 96px top+bottom.
 ${hasSelection ? `\nCurrently selected element:\n\`\`\`html\n${selectedHtml!.slice(0, 3000)}\n\`\`\`` : ''}
 
-OUTPUT RULES — choose the right format:
+ABSOLUTE RULES (apply to every single output):
+1. NEVER output <script> tags or any JavaScript — GrapesJS canvas does not reliably execute JS. All interactions (toggles, menus, tabs, accordions, hover states) MUST be implemented with pure CSS only: checkbox hack, :checked, :focus, :hover, :target selectors.
+2. ALWAYS make HTML output fully responsive by default — every page, every section, without being asked. Use flex-wrap, clamp(), max-width containers, @media queries.
+3. Never use fixed pixel widths on layout elements. Never use external fonts.
+
+OUTPUT FORMAT — choose one:
 
 A) STYLING CHANGE (color, gradient, shadow, border, padding, etc.):
    → Output a \`\`\`css block with ONLY the CSS properties to change. Applied directly to selected element.
 
 B) STRUCTURAL / CONTENT CHANGE (add sections, build a page, rewrite, add nav, etc.):
    → Output a \`\`\`html block with body content only (no <!DOCTYPE>, <html>, <head>, <body> tags).
-   → Put ALL CSS in a <style> tag first inside the block. No external font imports.
+   → Put ALL CSS in a <style> tag first inside the block.
 
 RESPONSIVENESS RULES (always apply when building pages):
 - Use max-width containers: <div style="max-width:1200px;margin:0 auto;padding:0 24px">
