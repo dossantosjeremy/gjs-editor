@@ -147,9 +147,14 @@ export const SiteEditor: React.FC = () => {
       if (!existing) {
         const style = doc.createElement('style');
         style.id = '--nav-force-open';
+        // Target every common class/id Claude might use for nav links
         style.textContent = [
-          '.nav-links{display:flex!important;flex-direction:column!important;position:static!important;',
-          'width:100%!important;gap:12px!important;padding:16px 24px!important}',
+          'nav ul,nav ol,header ul,header ol,',
+          '.nav-links,.nav-menu,.nav-items,.nav-drawer,.menu-links,.menu-items,',
+          '#nav-links,#nav-menu,#nav-drawer,#main-nav,[class*="nav-link"],[class*="nav-menu"],[class*="nav-item"]{',
+          'display:flex!important;flex-direction:column!important;position:static!important;',
+          'width:100%!important;gap:12px!important;padding:16px 24px!important;opacity:1!important;',
+          'visibility:visible!important;max-height:none!important;overflow:visible!important}',
         ].join('');
         doc.head.appendChild(style);
       }
@@ -839,26 +844,31 @@ RESPONSIVENESS RULES (always apply when building pages):
 - Never use fixed pixel widths on sections — use width:100% or percentages
 - Images: width:100%;height:auto;display:block
 
-HAMBURGER MENU — CRITICAL: GrapesJS canvas does NOT reliably execute <script> tags. NEVER use JavaScript for hamburger menus. Use ONLY the CSS-only checkbox pattern below. COPY THIS STRUCTURE EXACTLY — do not change the element nesting:
-<style>
-  #nav-toggle { display: none; }
-  .hamburger { display: none; cursor: pointer; flex-direction: column; gap: 5px; padding: 4px; background: none; border: none; }
-  .hamburger span { width: 24px; height: 2px; background: currentColor; display: block; transition: 0.3s; }
+HAMBURGER MENU — CRITICAL RULES:
+1. NEVER use JavaScript. GrapesJS does not execute scripts.
+2. ALWAYS use EXACTLY the class names below: "hamburger", "nav-links". Never rename them.
+3. ALWAYS use EXACTLY the id "nav-toggle" on the checkbox. Never rename it.
+4. Use body:has(#nav-toggle:checked) as the PRIMARY selector — it works regardless of DOM depth.
+
+COPY THIS CSS AND HTML EXACTLY — do not change class names, ids, or nesting:
+
+CSS:
+  #nav-toggle { display: none; position: absolute; }
+  .hamburger { display: none; cursor: pointer; flex-direction: column; gap: 5px; padding: 8px; background: none; border: none; z-index: 1001; }
+  .hamburger span { width: 24px; height: 2px; background: currentColor; display: block; transition: 0.3s; border-radius: 2px; }
   .nav-links { display: flex; align-items: center; gap: 24px; list-style: none; margin: 0; padding: 0; }
   @media (max-width: 768px) {
     .hamburger { display: flex; }
-    .nav-links { display: none; flex-direction: column; align-items: flex-start; position: absolute; top: 100%; left: 0; right: 0; background: inherit; padding: 16px 24px; gap: 12px; border-top: 1px solid rgba(0,0,0,0.1); z-index: 999; }
-    /* :has() works regardless of where #nav-toggle sits inside nav */
-    nav:has(#nav-toggle:checked) .nav-links { display: flex; }
-    /* Fallback: checkbox is a direct child of nav */
-    nav > #nav-toggle:checked ~ .nav-links { display: flex; }
-    nav:has(#nav-toggle:checked) .hamburger span:nth-child(1) { transform: rotate(45deg) translate(5px,5px); }
-    nav:has(#nav-toggle:checked) .hamburger span:nth-child(2) { opacity: 0; }
-    nav:has(#nav-toggle:checked) .hamburger span:nth-child(3) { transform: rotate(-45deg) translate(5px,-5px); }
+    .nav-links { display: none; flex-direction: column; align-items: flex-start; width: 100%; padding: 16px 24px; gap: 16px; border-top: 1px solid rgba(128,128,128,0.2); }
+    /* PRIMARY: body:has works regardless of where checkbox sits in the DOM */
+    body:has(#nav-toggle:checked) .nav-links { display: flex !important; }
+    body:has(#nav-toggle:checked) .hamburger span:nth-child(1) { transform: rotate(45deg) translate(5px,5px); }
+    body:has(#nav-toggle:checked) .hamburger span:nth-child(2) { opacity: 0; }
+    body:has(#nav-toggle:checked) .hamburger span:nth-child(3) { transform: rotate(-45deg) translate(5px,-5px); }
   }
-</style>
-<!-- EXACT structure — keep checkbox, label, and nav-links all direct children of nav -->
-<nav style="position:relative">
+
+HTML structure (keep checkbox and nav-links as direct children of nav):
+<nav style="position:relative;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between">
   <input type="checkbox" id="nav-toggle">
   <div class="nav-brand">Logo</div>
   <label for="nav-toggle" class="hamburger"><span></span><span></span><span></span></label>
@@ -1175,19 +1185,16 @@ Always pick ONE format (css or html) — never both.`;
           ⊞ CMS
         </button>
 
-        {/* Preview in new tab */}
+        {/* Preview in new tab — Blob URL so it works on Vercel too, no popup blocking */}
         <button
           onClick={() => {
-            if (!activePage || !siteId) return;
-            // Save current state first, then open
             const editor = editorRef.current;
-            if (editor && status === 'ready') {
-              fetch('/api/save-page', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ siteId, pageKey: activePage.key, pageLabel: activePage.label, html: editor.getHtml(), css: editor.getCss() ?? '' }),
-              }).then(() => window.open(`/sites/${siteId}/${activePage.key}.html`, '_blank'));
-            }
+            if (!editor || !activePage) return;
+            const html = editor.getHtml();
+            const css  = editor.getCss() ?? '';
+            const full = `<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>${activePage.label}</title>\n<style>\n${css}\n</style>\n</head>\n<body>\n${html}\n</body>\n</html>`;
+            const url  = URL.createObjectURL(new Blob([full], { type: 'text/html' }));
+            window.open(url, '_blank');
           }}
           disabled={status !== 'ready'}
           style={{
