@@ -564,7 +564,7 @@ export const SiteEditor: React.FC = () => {
     } else if (col.template) {
       // Use custom card template
       newCards = col.records.map(r =>
-        renderWithTokens(col.template!, { ...r, _cover: r._cover ?? '' }, col.fields)
+        renderWithTokens(col.template!, { ...r, _cover: r._cover ?? '' }, col.fields, colKey)
       ).join('\n');
     } else {
       // Default card rendering (matches cmsInsertSnippet default)
@@ -717,10 +717,16 @@ export const SiteEditor: React.FC = () => {
   // ── CMS template helpers ──────────────────────────────────────────────────
   // Render a template with record data — textarea fields are parsed as markdown.
   // {{_cover}} resolves to record._cover (cover upload) falling back to any image-url field.
-  const renderWithTokens = (template: string, record: Record<string, string>, fields?: CmsField[]): string => {
-    const imgField = fields?.find(f => f.type === 'image-url')?.key;
+  const renderWithTokens = (template: string, record: Record<string, string>, fields?: CmsField[], colKey?: string): string => {
+    const imgField   = fields?.find(f => f.type === 'image-url')?.key;
+    const firstField = fields?.[0]?.key ?? 'title';
     return template.replace(/\{\{(\w+)\}\}/g, (_, key) => {
       if (key === '_cover') return record._cover || (imgField ? (record[imgField] ?? '') : '');
+      if (key === '_slug' && colKey) {
+        const base = (record[firstField] || '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 30);
+        const slug = (base ? `${base}-` : '') + record.id;
+        return `${colKey}/${slug}.html`;
+      }
       const val = record[key] ?? '';
       const field = fields?.find(f => f.key === key);
       if (field?.type === 'textarea') return mdToHtml(val);
@@ -729,18 +735,21 @@ export const SiteEditor: React.FC = () => {
   };
 
   const defaultListTemplate = (col: CmsCollection): string => {
-    const imgField  = col.fields.find(f => f.type === 'image-url')?.key;
-    const title     = col.fields[0]?.key ?? 'title';
-    const bodyField = col.fields.find(f => f.type === 'textarea')?.key;
+    const title      = col.fields[0]?.key ?? 'title';
+    const bodyField  = col.fields.find(f => f.type === 'textarea')?.key;
+    const textFields = col.fields.filter(f => f.type !== 'image-url' && f.key !== title && f.type !== 'textarea');
+    const body = bodyField
+      ? `<div style="color:#86868b;font-size:13px;margin:6px 0 0;line-height:1.6">{{${bodyField}}}</div>`
+      : textFields.map(f => `<p style="color:#86868b;font-size:13px;margin:4px 0 0">{{${f.key}}}</p>`).join('');
     return [
-      `<div class="cms-card" style="border:1px solid #d2d2d7;border-radius:16px;overflow:hidden;background:#fff">`,
-      imgField ? `  <img src="{{${imgField}}}" alt="{{${title}}}" style="width:100%;height:200px;object-fit:cover;display:block">` : '',
-      `  <div style="padding:20px">`,
-      `    <h3 style="margin:0 0 8px;font-size:18px;font-weight:700;color:#1d1d1f">{{${title}}}</h3>`,
-      bodyField ? `    <p style="margin:0;font-size:14px;color:#86868b;line-height:1.6">{{${bodyField}}}</p>` : '',
-      `  </div>`,
+      `<a href="{{_slug}}" style="text-decoration:none;color:inherit;display:block;border:1px solid #d2d2d7;border-radius:12px;overflow:hidden;background:#fff;transition:box-shadow .2s" onmouseover="this.style.boxShadow='0 4px 20px rgba(0,0,0,0.1)'" onmouseout="this.style.boxShadow='none'">`,
+      `<img src="{{_cover}}" alt="{{${title}}}" style="width:100%;height:180px;object-fit:cover;display:block" onerror="this.style.display='none'">`,
+      `<div style="padding:16px">`,
+      `<p style="font-weight:700;color:#1d1d1f;margin:0;font-size:16px">{{${title}}}</p>`,
+      body,
       `</div>`,
-    ].filter(Boolean).join('\n');
+      `</a>`,
+    ].filter(Boolean).join('');
   };
 
   const defaultRecordTemplate = (col: CmsCollection): string => {
@@ -793,7 +802,7 @@ export const SiteEditor: React.FC = () => {
       const pageHtml = editor.getHtml() as string;
       if (pageHtml.includes(`data-cms-cards="${colKey}"`)) {
         const gridInner = col.records.map(r =>
-          renderWithTokens(template, { ...r, _cover: r._cover ?? '' }, col.fields)
+          renderWithTokens(template, { ...r, _cover: r._cover ?? '' }, col.fields, colKey)
         ).join('\n');
         const innerRegex = new RegExp(
           `(data-cms-cards="${colKey}"[^>]*>)[\\s\\S]*?(<span[^>]+data-cms-end="${colKey}"[^>]*>)`,
@@ -903,6 +912,49 @@ Design it as a clean, readable article/detail page that showcases one record.`;
     setCmsOpen(false);
   };
 
+  // Reads the first card from the live GrapesJS canvas, converts its actual values back to
+  // {{tokens}}, and saves it as the card template — so every card (including new ones) matches.
+  const syncCardTemplateFromPage = (colKey: string) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const col = cmsData.collections[colKey];
+    if (!col || col.records.length === 0) {
+      alert('Add at least one record first, then edit a card on the page before syncing.');
+      return;
+    }
+    const pageHtml = editor.getHtml() as string;
+    const containerMatch = pageHtml.match(
+      new RegExp(`data-cms-cards="${colKey}"[^>]*>([\\s\\S]*?)<span[^>]+data-cms-end="${colKey}"`, 'i')
+    );
+    if (!containerMatch) {
+      alert('Collection not found on page. Insert the collection first, then edit a card.');
+      return;
+    }
+    const cardsHtml = containerMatch[1].trim();
+    if (!cardsHtml) return;
+    // Grab the first card element (<a> or <div>)
+    const firstCardMatch = cardsHtml.match(/^(<a\b[\s\S]*?<\/a>)/i) ||
+                           cardsHtml.match(/^(<div\b[\s\S]*?<\/div>)/i);
+    if (!firstCardMatch) { alert('Could not detect card element. Make sure cards are inserted on the page.'); return; }
+    let template = firstCardMatch[1];
+    const firstRecord = col.records[0];
+    const firstField  = col.fields[0]?.key ?? 'title';
+    // Build the full slug href for the first record so we can tokenize it
+    const base     = (firstRecord[firstField] || '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 30);
+    const slug     = (base ? `${base}-` : '') + firstRecord.id;
+    const fullHref = `${colKey}/${slug}.html`;
+    // Build substitution list — longest strings first to avoid partial replacements
+    const subs: [string, string][] = [[fullHref, '{{_slug}}']];
+    if (firstRecord._cover) subs.push([firstRecord._cover, '{{_cover}}']);
+    for (const field of col.fields) {
+      const val = (firstRecord[field.key] ?? '').trim();
+      if (val.length > 1) subs.push([val, `{{${field.key}}}`]);
+    }
+    subs.sort((a, b) => b[0].length - a[0].length);
+    for (const [val, token] of subs) template = template.split(val).join(token);
+    saveCollectionTemplate(colKey, template, col.recordTemplate ?? '');
+  };
+
   const cmsInsertSnippet = (colKey: string, layout: 'list'|'grid'|'cards'|'table') => {
     const editor = editorRef.current;
     if (!editor) return;
@@ -963,10 +1015,28 @@ Design it as a clean, readable article/detail page that showcases one record.`;
       inner = `<div data-cms-cards="${colKey}" style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #d2d2d7"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table><span data-cms-end="${colKey}" style="display:none"></span></div>`;
     }
 
-    // Use custom template if set — pass fields for markdown rendering
-    if (col.template && col.records.length > 0) {
-      const gridInner = col.records.map(r => renderWithTokens(col.template!, { ...r, _cover: r._cover ?? '' }, col.fields)).join('\n');
-      const snippet2 = `<section id="cms-${colKey}" data-cms="${colKey}" style="padding:clamp(40px,6vw,80px) 0"><div style="max-width:1100px;margin:0 auto;padding:0 clamp(16px,5vw,40px)"><h2 style="font-size:clamp(1.4rem,4vw,2rem);font-weight:700;margin-bottom:24px">${col.label}</h2><div class="cms-grid" data-cms-cards="${colKey}" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr));gap:24px">${gridInner}<span data-cms-end="${colKey}" style="display:none"></span></div></div></section>`;
+    // For non-table layouts: ensure a card template always exists so record additions
+    // auto-refresh the canvas with the correct card design.
+    const cardTemplate = col.template || (layout !== 'table' ? defaultListTemplate(col) : '');
+    if (!col.template && layout !== 'table') {
+      const next: CmsData = {
+        collections: { ...cmsData.collections, [colKey]: { ...col, template: cardTemplate } },
+      };
+      setCmsData(next);
+      if (siteId) saveCmsData(siteId, next); // fire-and-forget to persist
+    }
+
+    // Render via template for all non-table layouts (so the design is always linked)
+    if (cardTemplate && layout !== 'table') {
+      const gridInner = col.records.length > 0
+        ? col.records.map(r => renderWithTokens(cardTemplate, { ...r, _cover: r._cover ?? '' }, col.fields, colKey)).join('\n')
+        : '<p style="color:#86868b;font-size:14px">No records yet. Add records in the CMS panel.</p>';
+      const containerStyle = layout === 'grid'
+        ? 'display:grid;grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr));gap:20px'
+        : layout === 'cards'
+          ? 'display:flex;flex-direction:column;gap:12px'
+          : 'display:flex;flex-direction:column;gap:16px';
+      const snippet2 = `<section id="cms-${colKey}" data-cms="${colKey}" data-cms-layout="${layout}" style="padding:clamp(40px,6vw,80px) 0"><div style="max-width:1100px;margin:0 auto;padding:0 clamp(16px,5vw,40px)"><h2 style="font-size:clamp(1.4rem,4vw,2rem);font-weight:700;margin-bottom:24px">${col.label}</h2><div data-cms-cards="${colKey}" style="${containerStyle}">${gridInner}<span data-cms-end="${colKey}" style="display:none"></span></div></div></section>`;
       editor.setComponents((editor.getHtml() || '') + snippet2);
       setCmsSnippetCol(null);
       setCmsOpen(false);
@@ -1945,11 +2015,14 @@ Always pick ONE format (css or html) — never both.`;
                   <button onClick={() => setCmsSnippetCol(cmsSnippetCol === activeCol ? null : activeCol)}
                     style={{ padding: '5px 12px', background: 'transparent', color: '#7c3aed', border: '1px solid #7c3aed', borderRadius: 9999, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{'</>'} Insert</button>
                   <button onClick={() => enterTemplateMode(activeCol)}
-                    title="Open card template in the main canvas for drag-and-drop design"
+                    title="Open card template in the canvas — drag-and-drop, Claude AI, and code all available"
                     style={{ padding: '5px 12px', background: 'transparent', color: '#f59e0b', border: '1px solid #f59e0b', borderRadius: 9999, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>🎨 Design</button>
                   <button onClick={() => { enterRecordTemplateMode(activeCol); setCmsOpen(false); }}
-                    title="Edit the individual record page template"
+                    title="Open the record page template in the canvas"
                     style={{ padding: '5px 12px', background: 'transparent', color: '#a78bfa', border: '1px solid #a78bfa', borderRadius: 9999, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>📄 Record</button>
+                  <button onClick={() => syncCardTemplateFromPage(activeCol)}
+                    title="Read the first card you edited on the page and save its design as the template for ALL cards"
+                    style={{ padding: '5px 12px', background: 'transparent', color: '#34d399', border: '1px solid #34d399', borderRadius: 9999, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>📌 Sync</button>
                 </div>
 
                 {/* Snippet layout picker */}
