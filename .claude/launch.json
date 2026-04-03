@@ -2,9 +2,9 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "editor-base-dev",
-      "runtimeExecutable": "/usr/local/bin/node",
-      "runtimeArgs": ["node_modules/vite/bin/vite.js", "--port", "5174"],
+      "name": "editor-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
       "port": 5174
     }
   ]

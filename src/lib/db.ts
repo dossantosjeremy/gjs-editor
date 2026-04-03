@@ -20,7 +20,15 @@ async function uid(): Promise<string> {
 export type CmsFieldType = 'text' | 'textarea' | 'number' | 'date' | 'url' | 'image-url';
 export type CmsField      = { key: string; label: string; type: CmsFieldType };
 export type CmsRecord     = { id: string; [key: string]: string };
-export type CmsCollection = { label: string; fields: CmsField[]; records: CmsRecord[] };
+export type CmsCollection = {
+  label: string;
+  fields: CmsField[];
+  records: CmsRecord[];
+  /** HTML template for the collection list — uses {{fieldKey}} tokens */
+  template?: string;
+  /** HTML template for individual record pages — uses {{fieldKey}} tokens */
+  recordTemplate?: string;
+};
 export type CmsData       = { collections: Record<string, CmsCollection> };
 
 // ── Sites ─────────────────────────────────────────────────────────────────────
