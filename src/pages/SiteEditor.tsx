@@ -545,86 +545,56 @@ export const SiteEditor: React.FC = () => {
     const col = cms.collections[colKey];
     if (!col) return;
     const pageHtml = editor.getHtml() as string;
-    if (!pageHtml.includes(`data-cms="${colKey}"`)) return;
+    // Only refresh if this collection has the live-link marker on the page
+    if (!pageHtml.includes(`data-cms-cards="${colKey}"`)) return;
 
-    let newSection: string;
+    const rSlug = (r: Record<string, string>) => {
+      const base = (r[col.fields[0]?.key ?? ''] || '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 30);
+      return (base ? `${base}-` : '') + r.id;
+    };
+    const firstField = col.fields[0]?.key ?? 'title';
+    const imageField = col.fields.find(f => f.type === 'image-url')?.key ?? null;
+    const coverImg   = (r: Record<string, string>) => r._cover || (imageField ? r[imageField] : '');
+    const textFields = col.fields.filter(f => f.type !== 'image-url' && f.key !== firstField && f.type !== 'textarea');
+    const bodyField  = col.fields.find(f => f.type === 'textarea')?.key ?? null;
 
-    if (col.template) {
-      // Custom template — re-render every record through it
-      const gridInner = col.records.map(r =>
+    let newCards: string;
+    if (col.records.length === 0) {
+      newCards = '<p style="color:#86868b;font-size:14px">No records yet. Add records in the CMS panel.</p>';
+    } else if (col.template) {
+      // Use custom card template
+      newCards = col.records.map(r =>
         renderWithTokens(col.template!, { ...r, _cover: r._cover ?? '' }, col.fields)
       ).join('\n');
-      newSection = `<section id="cms-${colKey}" data-cms="${colKey}" style="padding:clamp(40px,6vw,80px) 0"><div style="max-width:1100px;margin:0 auto;padding:0 clamp(16px,5vw,40px)"><h2 style="font-size:clamp(1.4rem,4vw,2rem);font-weight:700;margin-bottom:24px">${col.label}</h2><div class="cms-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr));gap:24px">${gridInner}</div></div></section>`;
     } else {
-      // Default rendering — detect which layout was used from the attribute
-      const layoutMatch = pageHtml.match(
-        new RegExp(`<section[^>]*data-cms="${colKey}"[^>]*data-cms-layout="([^"]+)"|<section[^>]*data-cms-layout="([^"]+)"[^>]*data-cms="${colKey}"`)
-      );
-      const layout = (layoutMatch?.[1] ?? layoutMatch?.[2] ?? 'grid') as 'list' | 'grid' | 'cards' | 'table';
-
-      const firstField = col.fields[0]?.key ?? 'title';
-      const imageField = col.fields.find(f => f.type === 'image-url')?.key ?? null;
-      const coverImg   = (r: Record<string, string>) => r._cover || (imageField ? r[imageField] : '');
-      const textFields = col.fields.filter(f => f.type !== 'image-url' && f.key !== firstField && f.type !== 'textarea');
-      const bodyField  = col.fields.find(f => f.type === 'textarea')?.key ?? null;
-      const rSlug      = (r: Record<string, string>) => {
-        const base = (r[firstField] || '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 30);
-        return (base ? `${base}-` : '') + r.id;
-      };
-
-      const renderCard = (r: Record<string, string>, extraStyle = '') => {
+      // Default card rendering (matches cmsInsertSnippet default)
+      newCards = col.records.map(r => {
         const cover = coverImg(r);
         const img   = cover ? `<img src="${cover}" style="width:100%;height:180px;object-fit:cover;display:block" />` : '';
         const body  = bodyField && r[bodyField]
           ? `<div style="color:#86868b;font-size:13px;margin:6px 0 0;line-height:1.6">${mdToHtml(r[bodyField]).slice(0, 300)}</div>`
           : textFields.map(f => r[f.key] ? `<p style="color:#86868b;font-size:13px;margin:4px 0 0">${r[f.key]}</p>` : '').join('');
-        return `<a href="${colKey}/${rSlug(r)}.html" style="text-decoration:none;color:inherit;display:block;border:1px solid #d2d2d7;border-radius:12px;overflow:hidden;background:#fff;transition:box-shadow .2s${extraStyle}" onmouseover="this.style.boxShadow='0 4px 20px rgba(0,0,0,0.1)'" onmouseout="this.style.boxShadow='none'">${img}<div style="padding:16px"><p style="font-weight:700;color:#1d1d1f;margin:0;font-size:16px">${r[firstField] || 'Untitled'}</p>${body}</div></a>`;
-      };
-
-      let inner = '';
-      if (col.records.length === 0) {
-        inner = '<p style="color:#86868b;font-size:14px">No records yet. Add records in the CMS panel.</p>';
-      } else if (layout === 'grid') {
-        inner = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr));gap:20px">${col.records.map(r => renderCard(r)).join('')}</div>`;
-      } else if (layout === 'list') {
-        inner = col.records.map(r => renderCard(r, ';margin-bottom:16px')).join('');
-      } else if (layout === 'cards') {
-        inner = col.records.map(r => {
-          const cover = coverImg(r);
-          const img   = cover ? `<img src="${cover}" style="width:90px;height:90px;object-fit:cover;border-radius:8px;flex-shrink:0" />` : '';
-          const desc  = bodyField && r[bodyField]
-            ? `<div style="color:#86868b;font-size:13px;margin:4px 0 0">${mdToHtml(r[bodyField]).slice(0, 200)}</div>`
-            : textFields.map(f => r[f.key] ? `<p style="color:#86868b;font-size:13px;margin:4px 0 0">${r[f.key]}</p>` : '').join('');
-          return `<a href="${colKey}/${rSlug(r)}.html" style="display:flex;gap:16px;align-items:flex-start;border:1px solid #d2d2d7;border-radius:12px;background:#fff;margin-bottom:12px;padding:16px;text-decoration:none;color:inherit">${img}<div><p style="font-weight:700;color:#1d1d1f;margin:0;font-size:15px">${r[firstField] || 'Untitled'}</p>${desc}</div></a>`;
-        }).join('');
-      } else if (layout === 'table') {
-        const headers = col.fields.filter(f => f.type !== 'image-url').map(f =>
-          `<th style="text-align:left;padding:10px 14px;border-bottom:2px solid #d2d2d7;font-size:12px;color:#86868b;font-weight:600;text-transform:uppercase;letter-spacing:.05em">${f.label}</th>`
-        ).join('');
-        const rows = col.records.map(r => {
-          const cells = col.fields.filter(f => f.type !== 'image-url').map(f => {
-            const val = f.type === 'textarea' ? mdToHtml(r[f.key] ?? '').slice(0, 200) : (r[f.key] || '');
-            return `<td style="padding:10px 14px;border-bottom:1px solid #f0f0f5;font-size:14px;color:#1d1d1f">${val}</td>`;
-          }).join('');
-          return `<tr onclick="location.href='${colKey}/${rSlug(r)}.html'" style="cursor:pointer" onmouseover="this.style.background='#f5f5f7'" onmouseout="this.style.background=''">${cells}</tr>`;
-        }).join('');
-        inner = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #d2d2d7"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div>`;
-      }
-
-      newSection = `<section id="cms-${colKey}" data-cms="${colKey}" data-cms-layout="${layout}" style="padding:40px 0"><div style="max-width:960px;margin:0 auto;padding:0 24px"><h2 style="font-size:28px;font-weight:700;color:#1d1d1f;margin-bottom:24px">${col.label}</h2>${inner}</div></section>`;
+        const slug = rSlug(r);
+        return `<a href="${colKey}/${slug}.html" style="text-decoration:none;color:inherit;display:block;border:1px solid #d2d2d7;border-radius:12px;overflow:hidden;background:#fff;transition:box-shadow .2s" onmouseover="this.style.boxShadow='0 4px 20px rgba(0,0,0,0.1)'" onmouseout="this.style.boxShadow='none'">${img}<div style="padding:16px"><p style="font-weight:700;color:#1d1d1f;margin:0;font-size:16px">${r[firstField] || 'Untitled'}</p>${body}</div></a>`;
+      }).join('\n');
     }
 
-    const sectionRegex = new RegExp(`<section[^>]+data-cms="${colKey}"[^>]*>[\\s\\S]*?<\\/section>`);
-    const updated = pageHtml.replace(sectionRegex, newSection);
+    // Replace ONLY the card items between the live-link markers.
+    // This preserves the section wrapper (heading, padding, background) and the
+    // grid container (column count, gap) that the user may have edited in GrapesJS.
+    const innerRegex = new RegExp(
+      `(data-cms-cards="${colKey}"[^>]*>)[\\s\\S]*?(<span[^>]+data-cms-end="${colKey}"[^>]*>)`,
+      'i'
+    );
+    const updated = pageHtml.replace(innerRegex, `$1\n${newCards}\n$2`);
     if (updated !== pageHtml) editor.setComponents(updated);
   };
 
-  const cmsSave = async (next: CmsData) => {
+  const cmsSave = async (next: CmsData, refreshColKey?: string) => {
     setCmsData(next);
     await saveCmsData(siteId!, next);
-    // NOTE: we intentionally do NOT auto-refresh the page section here.
-    // The page is a visual snapshot — record edits should not overwrite layout changes
-    // made in the GrapesJS canvas. Re-insert the collection to get fresh renders.
+    // Refresh only the inner card items — section wrapper/layout styles are preserved
+    if (refreshColKey) refreshCmsSectionOnPage(refreshColKey, next);
   };
 
   const cmsSlug = (name: string) =>
@@ -659,7 +629,7 @@ export const SiteEditor: React.FC = () => {
     const col = cmsData.collections[colKey];
     if (!col) return;
     const records = col.records.map(r => r.id === rid ? { ...r, [fkey]: val } : r);
-    await cmsSave({ collections: { ...cmsData.collections, [colKey]: { ...col, records } } });
+    await cmsSave({ collections: { ...cmsData.collections, [colKey]: { ...col, records } } }, colKey);
   };
 
   const cmsAddRecord = async (colKey: string) => {
@@ -668,7 +638,7 @@ export const SiteEditor: React.FC = () => {
     const newId = Date.now().toString(36);
     const empty: CmsRecord = { id: newId };
     col.fields.forEach(f => { empty[f.key] = ''; });
-    await cmsSave({ collections: { ...cmsData.collections, [colKey]: { ...col, records: [...col.records, empty] } } });
+    await cmsSave({ collections: { ...cmsData.collections, [colKey]: { ...col, records: [...col.records, empty] } } }, colKey);
     const firstText = col.fields.find(f => f.type !== 'image-url' && f.type !== 'textarea');
     if (firstText) { setEditingCell({ rid: newId, fkey: firstText.key }); setCellDraft(''); }
   };
@@ -685,7 +655,7 @@ export const SiteEditor: React.FC = () => {
     const col = cmsData.collections[colKey];
     if (!col) return;
     const records = col.records.map(r => r.id === recordModal.id ? { ...r, ...modalDraft } : r);
-    await cmsSave({ collections: { ...cmsData.collections, [colKey]: { ...col, records } } });
+    await cmsSave({ collections: { ...cmsData.collections, [colKey]: { ...col, records } } }, colKey);
     setRecordModal(null);
   };
 
@@ -715,7 +685,7 @@ export const SiteEditor: React.FC = () => {
     const next: CmsData = {
       collections: { ...cmsData.collections, [colKey]: { ...col, records: col.records.filter(r => r.id !== recordId) } },
     };
-    await cmsSave(next);
+    await cmsSave(next, colKey);
   };
 
   const cmsReorderRecord = async (colKey: string, recordId: string, dir: -1 | 1) => {
@@ -726,7 +696,7 @@ export const SiteEditor: React.FC = () => {
     if (newIdx < 0 || newIdx >= col.records.length) return;
     const records = [...col.records];
     [records[idx], records[newIdx]] = [records[newIdx], records[idx]];
-    await cmsSave({ collections: { ...cmsData.collections, [colKey]: { ...col, records } } });
+    await cmsSave({ collections: { ...cmsData.collections, [colKey]: { ...col, records } } }, colKey);
   };
 
   const compressImage = (dataUrl: string): Promise<string> =>
@@ -816,20 +786,20 @@ export const SiteEditor: React.FC = () => {
     setCmsData(next);
     if (siteId) await saveCmsData(siteId, next);
 
-    // Re-render any existing CMS section for this collection on the current page
+    // Re-render card items for this collection on the current page (preserves section layout)
     const editor = editorRef.current;
     if (editor && template) {
       const col = next.collections[colKey];
       const pageHtml = editor.getHtml() as string;
-      // Check if this collection is already on the page
-      if (pageHtml.includes(`data-cms="${colKey}"`)) {
+      if (pageHtml.includes(`data-cms-cards="${colKey}"`)) {
         const gridInner = col.records.map(r =>
           renderWithTokens(template, { ...r, _cover: r._cover ?? '' }, col.fields)
         ).join('\n');
-        const newSection = `<section id="cms-${colKey}" data-cms="${colKey}" style="padding:clamp(40px,6vw,80px) 0"><div style="max-width:1100px;margin:0 auto;padding:0 clamp(16px,5vw,40px)"><h2 style="font-size:clamp(1.4rem,4vw,2rem);font-weight:700;margin-bottom:24px">${col.label}</h2><div class="cms-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr));gap:24px">${gridInner}</div></div></section>`;
-        // Replace the old section in the page HTML — use RegExp so colKey is interpolated
-        const sectionRegex = new RegExp(`<section[^>]+data-cms="${colKey}"[^>]*>[\\s\\S]*?<\\/section>`);
-        const updated = pageHtml.replace(sectionRegex, newSection);
+        const innerRegex = new RegExp(
+          `(data-cms-cards="${colKey}"[^>]*>)[\\s\\S]*?(<span[^>]+data-cms-end="${colKey}"[^>]*>)`,
+          'i'
+        );
+        const updated = pageHtml.replace(innerRegex, `$1\n${gridInner}\n$2`);
         if (updated !== pageHtml) editor.setComponents(updated);
       }
     }
@@ -967,11 +937,11 @@ Design it as a clean, readable article/detail page that showcases one record.`;
     if (col.records.length === 0) {
       inner = '<p style="color:#86868b;font-size:14px">No records yet. Add records in the CMS panel.</p>';
     } else if (layout === 'grid') {
-      inner = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr));gap:20px">${col.records.map(r => renderCard(r)).join('')}</div>`;
+      inner = `<div data-cms-cards="${colKey}" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr));gap:20px">${col.records.map(r => renderCard(r)).join('')}<span data-cms-end="${colKey}" style="display:none"></span></div>`;
     } else if (layout === 'list') {
-      inner = col.records.map(r => renderCard(r, ';margin-bottom:16px')).join('');
+      inner = `<div data-cms-cards="${colKey}">${col.records.map(r => renderCard(r, ';margin-bottom:16px')).join('')}<span data-cms-end="${colKey}" style="display:none"></span></div>`;
     } else if (layout === 'cards') {
-      inner = col.records.map(r => {
+      inner = `<div data-cms-cards="${colKey}">${col.records.map(r => {
         const cover = coverImg(r);
         const img  = cover ? `<img src="${cover}" style="width:90px;height:90px;object-fit:cover;border-radius:8px;flex-shrink:0" />` : '';
         const desc = bodyField && r[bodyField]
@@ -979,7 +949,7 @@ Design it as a clean, readable article/detail page that showcases one record.`;
           : textFields.map(f => r[f.key] ? `<p style="color:#86868b;font-size:13px;margin:4px 0 0">${r[f.key]}</p>` : '').join('');
         const slug = recordSlug(r);
         return `<a href="${colKey}/${slug}.html" style="display:flex;gap:16px;align-items:flex-start;border:1px solid #d2d2d7;border-radius:12px;background:#fff;margin-bottom:12px;padding:16px;text-decoration:none;color:inherit">${img}<div><p style="font-weight:700;color:#1d1d1f;margin:0;font-size:15px">${r[firstField] || 'Untitled'}</p>${desc}</div></a>`;
-      }).join('');
+      }).join('')}<span data-cms-end="${colKey}" style="display:none"></span></div>`;
     } else if (layout === 'table') {
       const headers = col.fields.filter(f => f.type !== 'image-url').map(f => `<th style="text-align:left;padding:10px 14px;border-bottom:2px solid #d2d2d7;font-size:12px;color:#86868b;font-weight:600;text-transform:uppercase;letter-spacing:.05em">${f.label}</th>`).join('');
       const rows    = col.records.map(r => {
@@ -990,13 +960,13 @@ Design it as a clean, readable article/detail page that showcases one record.`;
         }).join('');
         return `<tr onclick="location.href='${colKey}/${slug}.html'" style="cursor:pointer" onmouseover="this.style.background='#f5f5f7'" onmouseout="this.style.background=''">${cells}</tr>`;
       }).join('');
-      inner = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #d2d2d7"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div>`;
+      inner = `<div data-cms-cards="${colKey}" style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #d2d2d7"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table><span data-cms-end="${colKey}" style="display:none"></span></div>`;
     }
 
     // Use custom template if set — pass fields for markdown rendering
     if (col.template && col.records.length > 0) {
       const gridInner = col.records.map(r => renderWithTokens(col.template!, { ...r, _cover: r._cover ?? '' }, col.fields)).join('\n');
-      const snippet2 = `<section id="cms-${colKey}" data-cms="${colKey}" style="padding:clamp(40px,6vw,80px) 0"><div style="max-width:1100px;margin:0 auto;padding:0 clamp(16px,5vw,40px)"><h2 style="font-size:clamp(1.4rem,4vw,2rem);font-weight:700;margin-bottom:24px">${col.label}</h2><div class="cms-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr));gap:24px">${gridInner}</div></div></section>`;
+      const snippet2 = `<section id="cms-${colKey}" data-cms="${colKey}" style="padding:clamp(40px,6vw,80px) 0"><div style="max-width:1100px;margin:0 auto;padding:0 clamp(16px,5vw,40px)"><h2 style="font-size:clamp(1.4rem,4vw,2rem);font-weight:700;margin-bottom:24px">${col.label}</h2><div class="cms-grid" data-cms-cards="${colKey}" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr));gap:24px">${gridInner}<span data-cms-end="${colKey}" style="display:none"></span></div></div></section>`;
       editor.setComponents((editor.getHtml() || '') + snippet2);
       setCmsSnippetCol(null);
       setCmsOpen(false);
