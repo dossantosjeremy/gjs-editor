@@ -1,6 +1,5 @@
-// Vercel Edge Function — proxies requests to the Anthropic API.
-// Set ANTHROPIC_API_KEY in Vercel dashboard, OR pass it via x-api-key header
-// (stored in the editor's browser localStorage — never in the bundle).
+// Vercel Edge Function — streams Anthropic API responses to avoid timeout.
+// Set ANTHROPIC_API_KEY in Vercel dashboard, OR pass it via x-api-key header.
 export const config = { runtime: 'edge' };
 
 export default async function handler(request: Request) {
@@ -11,9 +10,7 @@ export default async function handler(request: Request) {
     });
 
   try {
-    if (request.method !== 'POST') {
-      return json({ error: 'Method not allowed' }, 405);
-    }
+    if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
     const apiKey =
       process.env.ANTHROPIC_API_KEY ||
@@ -21,18 +18,14 @@ export default async function handler(request: Request) {
       '';
 
     if (!apiKey) {
-      return json(
-        { error: 'No Anthropic API key configured. Set ANTHROPIC_API_KEY in Vercel or enter it in the Claude panel.' },
-        400,
-      );
+      return json({ error: 'No Anthropic API key. Set ANTHROPIC_API_KEY in Vercel or enter it in the Claude panel.' }, 400);
     }
 
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return json({ error: 'Invalid JSON body' }, 400);
-    }
+    let body: any;
+    try { body = await request.json(); } catch { return json({ error: 'Invalid JSON body' }, 400); }
+
+    // Force streaming — this keeps the connection alive and avoids Edge timeout
+    body.stream = true;
 
     const upstream = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -44,16 +37,19 @@ export default async function handler(request: Request) {
       body: JSON.stringify(body),
     });
 
-    // Parse as text first so a non-JSON upstream response doesn't crash
-    const text = await upstream.text();
-    let data: unknown;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      return json({ error: `Upstream error: ${text.slice(0, 300)}` }, 502);
+    if (!upstream.ok || !upstream.body) {
+      const errText = await upstream.text();
+      return json({ error: `Anthropic error ${upstream.status}: ${errText.slice(0, 300)}` }, upstream.status);
     }
 
-    return json(data, upstream.status);
+    // Pipe the SSE stream straight through to the browser
+    return new Response(upstream.body, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no',
+      },
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     return json({ error: message }, 500);

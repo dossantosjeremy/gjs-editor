@@ -654,16 +654,50 @@ export const SiteEditor: React.FC = () => {
     });
   };
 
-  const callClaude = async (messages: any[], system: string): Promise<string> => {
+  // Stream a Claude response, calling onChunk with each text delta and returning the full text
+  const streamClaude = async (messages: any[], system: string, onChunk: (partial: string) => void): Promise<string> => {
     const res = await fetch('/api/claude', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
       body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 8000, system, messages }),
     });
-    const text = await res.text();
-    let data: any;
-    try { data = JSON.parse(text); } catch { return `Error: ${text.slice(0, 300)}`; }
-    return data.content?.[0]?.text ?? data.error?.message ?? data.error ?? 'No response received.';
+
+    // Non-streaming error response (JSON)
+    if (!res.ok || res.headers.get('content-type')?.includes('application/json')) {
+      const text = await res.text();
+      try { const d = JSON.parse(text); return `Error: ${d.error?.message ?? d.error ?? text.slice(0, 200)}`; }
+      catch { return `Error: ${text.slice(0, 200)}`; }
+    }
+
+    // Read SSE stream
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let fullText = '';
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim();
+        if (payload === '[DONE]') continue;
+        try {
+          const event = JSON.parse(payload);
+          if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+            fullText += event.delta.text;
+            onChunk(fullText);
+          } else if (event.type === 'error') {
+            return `Error: ${event.error?.message ?? JSON.stringify(event.error)}`;
+          }
+        } catch { /* incomplete JSON chunk, skip */ }
+      }
+    }
+
+    return fullText || 'No response received.';
   };
 
   const handleClaudeChat = async () => {
@@ -719,30 +753,39 @@ When in doubt about styling vs structure: if the user says "change", "make it", 
 If the user says "build", "create", "add a section", "redesign" → use \`\`\`html.
 Always pick ONE format — never output both in the same response.`;
 
-    // Build message history (plain strings) + new multimodal message
     const historyMsgs = chatMsgs.map(m => ({ role: m.role, content: m.content }));
     const newMsg = { role: 'user' as const, content: apiContent.length === 1 && apiContent[0].type === 'text' ? apiContent[0].text : apiContent };
 
+    // Add a placeholder assistant message that we'll update as chunks arrive
+    setChatMsgs(prev => [...prev, { role: 'assistant', content: '…' }]);
+
     try {
-      let reply = await callClaude([...historyMsgs, newMsg], system);
+      const reply = await streamClaude([...historyMsgs, newMsg], system, (partial) => {
+        setChatMsgs(prev => {
+          const next = [...prev];
+          next[next.length - 1] = { role: 'assistant', content: partial };
+          return next;
+        });
+      });
 
-      // ── Auto-retry up to 2× if no code block was returned ─────────────────
-      let retries = 0;
-      while (!/```(html|css)/i.test(reply) && retries < 2) {
-        retries++;
-        const retryMsg = { role: 'user' as const, content: 'You did not include a code block. Output your answer now using ```css for style changes or ```html for structural changes — exactly as instructed.' };
-        reply = await callClaude([...historyMsgs, newMsg, { role: 'assistant' as const, content: reply }, retryMsg], system);
-      }
+      // Finalize the message
+      setChatMsgs(prev => {
+        const next = [...prev];
+        next[next.length - 1] = { role: 'assistant', content: reply };
+        return next;
+      });
 
-      setChatMsgs(prev => [...prev, { role: 'assistant', content: reply }]);
-
-      // ── Auto-apply immediately ──────────────────────────────────────────────
+      // Auto-apply
       setTimeout(() => {
-        if (/```css/i.test(reply))  applyClaudeCss(reply);
+        if (/```css/i.test(reply))       applyClaudeCss(reply);
         else if (/```html/i.test(reply)) applyClaudeHtml(reply);
       }, 100);
     } catch (err: any) {
-      setChatMsgs(prev => [...prev, { role: 'assistant', content: `Error: ${err.message}` }]);
+      setChatMsgs(prev => {
+        const next = [...prev];
+        next[next.length - 1] = { role: 'assistant', content: `Error: ${err.message}` };
+        return next;
+      });
     }
     setChatLoading(false);
   };
