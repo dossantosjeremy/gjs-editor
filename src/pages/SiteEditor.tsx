@@ -163,7 +163,7 @@ export const SiteEditor: React.FC = () => {
   const [exportHtml, setExportHtml] = useState<string | null>(null);
 
   // Template mode — loads a CMS card template into the main GrapesJS canvas for visual editing
-  const [templateMode, setTemplateMode] = useState<{ colKey: string; originalHtml: string; originalCss: string } | null>(null);
+  const [templateMode, setTemplateMode] = useState<{ colKey: string; originalHtml: string; originalCss: string; isRecord?: boolean } | null>(null);
 
   // Nav state preview
   const [navForceOpen, setNavForceOpen] = useState(false);
@@ -567,8 +567,10 @@ export const SiteEditor: React.FC = () => {
       const coverImg   = (r: Record<string, string>) => r._cover || (imageField ? r[imageField] : '');
       const textFields = col.fields.filter(f => f.type !== 'image-url' && f.key !== firstField && f.type !== 'textarea');
       const bodyField  = col.fields.find(f => f.type === 'textarea')?.key ?? null;
-      const rSlug      = (r: Record<string, string>) =>
-        (r[firstField] || r.id || 'record').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 60);
+      const rSlug      = (r: Record<string, string>) => {
+        const base = (r[firstField] || '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 30);
+        return (base ? `${base}-` : '') + r.id;
+      };
 
       const renderCard = (r: Record<string, string>, extraStyle = '') => {
         const cover = coverImg(r);
@@ -873,10 +875,23 @@ Design it as a clean, readable article/detail page that showcases one record.`;
     if (!editor || !templateMode) return;
     const html = editor.getHtml();
     const css  = editor.getCss() ?? '';
-    // Merge CSS into the template via a <style> tag so it's self-contained
-    const withCss = css ? `<style>${css}</style>\n${html}` : html;
-    const col = cmsData.collections[templateMode.colKey];
-    await saveCollectionTemplate(templateMode.colKey, withCss, col.recordTemplate ?? '');
+    const col  = cmsData.collections[templateMode.colKey];
+    if (templateMode.isRecord) {
+      // Reconstruct full-page record template
+      const titleKey = col?.fields[0]?.key ?? 'title';
+      const fullTemplate = [
+        '<!DOCTYPE html><html lang="en"><head>',
+        '<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
+        `<title>{{${titleKey}}}</title>`,
+        css ? `<style>${css}</style>` : '',
+        `</head><body>${html}</body></html>`,
+      ].join('\n');
+      await saveCollectionTemplate(templateMode.colKey, col.template ?? '', fullTemplate);
+    } else {
+      // Card template
+      const withCss = css ? `<style>${css}</style>\n${html}` : html;
+      await saveCollectionTemplate(templateMode.colKey, withCss, col.recordTemplate ?? '');
+    }
     editor.setComponents(templateMode.originalHtml);
     editor.setStyle(templateMode.originalCss);
     setTemplateMode(null);
@@ -890,6 +905,25 @@ Design it as a clean, readable article/detail page that showcases one record.`;
     setTemplateMode(null);
   };
 
+  const enterRecordTemplateMode = (colKey: string) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const col = cmsData.collections[colKey];
+    const originalHtml = editor.getHtml();
+    const originalCss  = editor.getCss() ?? '';
+    const tmpl = col.recordTemplate || defaultRecordTemplate(col);
+    // Extract body content from the full-page template
+    const bodyMatch = tmpl.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+    const bodyContent = bodyMatch?.[1]?.trim() ?? tmpl;
+    // Extract CSS from <style> tags in <head>
+    const styleMatches = [...tmpl.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)];
+    const headCss = styleMatches.map((m: RegExpMatchArray) => m[1]).join('\n');
+    editor.setComponents(bodyContent);
+    editor.setStyle(headCss || '');
+    setTemplateMode({ colKey, originalHtml, originalCss, isRecord: true });
+    setCmsOpen(false);
+  };
+
   const cmsInsertSnippet = (colKey: string, layout: 'list'|'grid'|'cards'|'table') => {
     const editor = editorRef.current;
     if (!editor) return;
@@ -897,9 +931,10 @@ Design it as a clean, readable article/detail page that showcases one record.`;
     if (!col) return;
 
     // Slugify a record title for use as a page-link anchor
-    const recordSlug = (r: Record<string, string>) =>
-      (r[col.fields[0]?.key ?? ''] || r.id || 'record')
-        .toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 60);
+    const recordSlug = (r: Record<string, string>) => {
+      const base = (r[col.fields[0]?.key ?? ''] || '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 30);
+      return (base ? `${base}-` : '') + r.id;
+    };
 
     const firstField  = col.fields[0]?.key ?? 'title';
     const imageField  = col.fields.find(f => f.type === 'image-url')?.key ?? null;
@@ -1436,6 +1471,20 @@ Always pick ONE format (css or html) — never both.`;
   // ── Guard ─────────────────────────────────────────────────────────────────
   if (!site) return null;
 
+  // CMS panel theme colors
+  const ck = {
+    bg1: lightTheme ? '#ffffff' : '#111111',
+    bg2: lightTheme ? '#f5f5f7' : '#1a1a1a',
+    bg3: lightTheme ? '#e8e8ed' : '#0d0d0d',
+    bg4: lightTheme ? '#f0f0f5' : '#161616',
+    tx1: lightTheme ? '#1d1d1f' : '#cccccc',
+    tx2: lightTheme ? '#555555' : '#888888',
+    tx3: lightTheme ? '#86868b' : '#555555',
+    bd1: lightTheme ? '#d2d2d7' : '#2a2a2a',
+    bd2: lightTheme ? '#e8e8ed' : '#1a1a1a',
+    bd3: lightTheme ? '#f0f0f5' : '#1e1e1e',
+  };
+
   const saved = saveLabel.startsWith('✓');
   const pages = site.pages;
 
@@ -1564,8 +1613,8 @@ Always pick ONE format (css or html) — never both.`;
             // Replace every CMS record link with a Blob URL of that record's page
             for (const [colKey, col] of Object.entries(cmsData.collections)) {
               for (const record of col.records) {
-                const slug = (record[col.fields[0]?.key ?? ''] || record.id || 'record')
-                  .toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 60);
+                const base2 = (record[col.fields[0]?.key ?? ''] || '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 30);
+                const slug = (base2 ? `${base2}-` : '') + record.id;
                 const template   = col.recordTemplate || defaultRecordTemplate(col);
                 const recordHtml = renderWithTokens(template, { ...record, _cover: record._cover ?? '' }, col.fields);
                 const recordUrl  = URL.createObjectURL(new Blob([recordHtml], { type: 'text/html' }));
@@ -1712,10 +1761,10 @@ Always pick ONE format (css or html) — never both.`;
       {templateMode && (
         <div style={{ flexShrink: 0, background: '#f59e0b', padding: '8px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 30 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 15 }}>🎨</span>
+            <span style={{ fontSize: 15 }}>{templateMode.isRecord ? '📄' : '🎨'}</span>
             <div>
-              <span style={{ color: '#000', fontWeight: 700, fontSize: 13 }}>Editing card template for "{cmsData.collections[templateMode.colKey]?.label}"</span>
-              <span style={{ color: 'rgba(0,0,0,0.6)', fontSize: 11, marginLeft: 10 }}>Use drag-and-drop, Claude, and any GrapesJS tools. Tokens like <code style={{ background: 'rgba(0,0,0,0.15)', padding: '1px 5px', borderRadius: 4 }}>{'{{title}}'}</code> will be replaced with real data on insert.</span>
+              <span style={{ color: '#000', fontWeight: 700, fontSize: 13 }}>{templateMode.isRecord ? '📄 Editing record page for' : '🎨 Editing card template for'} "{cmsData.collections[templateMode.colKey]?.label}"</span>
+              <span style={{ color: 'rgba(0,0,0,0.6)', fontSize: 11, marginLeft: 10 }}>{templateMode.isRecord ? 'Design the record page. Tokens like' : 'Use drag-and-drop, Claude, and any GrapesJS tools. Tokens like'} <code style={{ background: 'rgba(0,0,0,0.15)', padding: '1px 5px', borderRadius: 4 }}>{'{{title}}'}</code> will be replaced with real data on insert.</span>
             </div>
           </div>
           <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
@@ -1857,10 +1906,10 @@ Always pick ONE format (css or html) — never both.`;
                 <p style={{ color: '#444', fontSize: 12, lineHeight: 1.6 }}>No collections yet. Create one to start managing content on this site.</p>
               )}
               {Object.entries(cmsData.collections).map(([key, col]) => (
-                <div key={key} style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: 10, padding: '12px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div key={key} style={{ background: ck.bg2, border: `1px solid ${ck.bd1}`, borderRadius: 10, padding: '12px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div>
-                    <p style={{ color: '#ccc', fontSize: 13, fontWeight: 600 }}>{col.label}</p>
-                    <p style={{ color: '#555', fontSize: 11, marginTop: 2 }}>{col.records.length} record{col.records.length !== 1 ? 's' : ''} · {col.fields.length} field{col.fields.length !== 1 ? 's' : ''}</p>
+                    <p style={{ color: ck.tx1, fontSize: 13, fontWeight: 600 }}>{col.label}</p>
+                    <p style={{ color: ck.tx3, fontSize: 11, marginTop: 2 }}>{col.records.length} record{col.records.length !== 1 ? 's' : ''} · {col.fields.length} field{col.fields.length !== 1 ? 's' : ''}</p>
                   </div>
                   <div style={{ display: 'flex', gap: 6 }}>
                     <button onClick={() => { setActiveCol(key); setCmsView('table'); }} style={{ padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, background: '#7c3aed', color: '#fff', border: 'none', cursor: 'pointer' }}>Open</button>
@@ -1870,20 +1919,20 @@ Always pick ONE format (css or html) — never both.`;
               ))}
 
               {/* New collection form */}
-              <div style={{ background: '#0d0d0d', border: '1px solid #2a2a2a', borderRadius: 10, padding: 14, marginTop: 8 }}>
-                <p style={{ color: '#666', fontSize: 11, fontWeight: 600, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>New Collection</p>
+              <div style={{ background: ck.bg3, border: `1px solid ${ck.bd1}`, borderRadius: 10, padding: 14, marginTop: 8 }}>
+                <p style={{ color: ck.tx2, fontSize: 11, fontWeight: 600, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>New Collection</p>
                 <input
                   value={newColName} onChange={e => setNewColName(e.target.value)}
                   placeholder="Collection name (e.g. Blog Posts)"
-                  style={{ width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: 6, padding: '7px 10px', color: '#ccc', fontSize: 12, outline: 'none', boxSizing: 'border-box', marginBottom: 10 }}
+                  style={{ width: '100%', background: ck.bg2, border: `1px solid ${ck.bd1}`, borderRadius: 6, padding: '7px 10px', color: ck.tx1, fontSize: 12, outline: 'none', boxSizing: 'border-box', marginBottom: 10 }}
                 />
                 <p style={{ color: '#555', fontSize: 11, marginBottom: 6 }}>Fields</p>
                 {newColFields.map((f, i) => (
                   <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
                     <input value={f.label} onChange={e => setNewColFields(prev => prev.map((x, j) => j === i ? { ...x, label: e.target.value, key: cmsSlug(e.target.value) || x.key } : x))}
-                      placeholder="Field label" style={{ flex: 1, background: '#1a1a1a', border: '1px solid #333', borderRadius: 6, padding: '5px 8px', color: '#ccc', fontSize: 11, outline: 'none' }} />
+                      placeholder="Field label" style={{ flex: 1, background: ck.bg2, border: `1px solid ${ck.bd1}`, borderRadius: 6, padding: '5px 8px', color: ck.tx1, fontSize: 11, outline: 'none' }} />
                     <select value={f.type} onChange={e => setNewColFields(prev => prev.map((x, j) => j === i ? { ...x, type: e.target.value as CmsFieldType } : x))}
-                      style={{ background: '#1a1a1a', border: '1px solid #333', borderRadius: 6, padding: '5px 6px', color: '#888', fontSize: 10, outline: 'none' }}>
+                      style={{ background: ck.bg2, border: `1px solid ${ck.bd1}`, borderRadius: 6, padding: '5px 6px', color: ck.tx2, fontSize: 10, outline: 'none' }}>
                       {(['text','textarea','number','date','url','image-url'] as CmsFieldType[]).map(t => <option key={t} value={t}>{t}</option>)}
                     </select>
                     {newColFields.length > 1 && (
@@ -1904,7 +1953,7 @@ Always pick ONE format (css or html) — never both.`;
           {/* ── Table view (Supabase-style) ── */}
           {cmsView === 'table' && activeCol && cmsData.collections[activeCol] && (() => {
             const col = cmsData.collections[activeCol];
-            const cellStyle: React.CSSProperties = { padding: '0 8px', height: 36, borderRight: '1px solid #1e1e1e', display: 'flex', alignItems: 'center', minWidth: 0, overflow: 'hidden', flexShrink: 0 };
+            const cellStyle: React.CSSProperties = { padding: '0 8px', height: 36, borderRight: `1px solid ${ck.bd3}`, display: 'flex', alignItems: 'center', minWidth: 0, overflow: 'hidden', flexShrink: 0 };
             const COL_W = 130;
             return (
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -1919,12 +1968,7 @@ Always pick ONE format (css or html) — never both.`;
                   <button onClick={() => enterTemplateMode(activeCol)}
                     title="Open card template in the main canvas for drag-and-drop design"
                     style={{ padding: '5px 12px', background: 'transparent', color: '#f59e0b', border: '1px solid #f59e0b', borderRadius: 9999, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>🎨 Design</button>
-                  <button onClick={() => {
-                    const col = cmsData.collections[activeCol];
-                    setCmsRecordTemplate(col.recordTemplate || defaultRecordTemplate(col));
-                    setTemplatePrompt('');
-                    setCmsView('record-template');
-                  }}
+                  <button onClick={() => { enterRecordTemplateMode(activeCol); setCmsOpen(false); }}
                     title="Edit the individual record page template"
                     style={{ padding: '5px 12px', background: 'transparent', color: '#a78bfa', border: '1px solid #a78bfa', borderRadius: 9999, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>📄 Record</button>
                 </div>
@@ -1949,15 +1993,15 @@ Always pick ONE format (css or html) — never both.`;
                 )}
 
                 {/* Table header */}
-                <div style={{ display: 'flex', background: '#161616', borderBottom: '2px solid #2a2a2a', flexShrink: 0, overflowX: 'auto' }}>
+                <div style={{ display: 'flex', background: ck.bg4, borderBottom: `2px solid ${ck.bd1}`, flexShrink: 0, overflowX: 'auto' }}>
                   <div style={{ ...cellStyle, width: 28, minWidth: 28 }} />
                   {col.fields.map(f => (
-                    <div key={f.key} style={{ ...cellStyle, width: COL_W, fontWeight: 700, color: '#888', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', flexShrink: 0 }}>
+                    <div key={f.key} style={{ ...cellStyle, width: COL_W, fontWeight: 700, color: ck.tx2, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', flexShrink: 0 }}>
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.label}</span>
                       <span style={{ color: '#333', marginLeft: 4, fontSize: 9 }}>{f.type}</span>
                     </div>
                   ))}
-                  <div style={{ ...cellStyle, width: 28, minWidth: 28 }} />
+                  <div style={{ ...cellStyle, width: 60, minWidth: 60 }} />
                 </div>
 
                 {/* Rows */}
@@ -1966,9 +2010,9 @@ Always pick ONE format (css or html) — never both.`;
                     <div style={{ padding: '20px 16px', color: '#444', fontSize: 12 }}>No records yet. Click + Row to add one.</div>
                   )}
                   {col.records.map((record, idx) => (
-                    <div key={record.id} style={{ display: 'flex', borderBottom: '1px solid #1a1a1a', background: '#111' }}
-                      onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.background = '#161616'}
-                      onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.background = '#111'}>
+                    <div key={record.id} style={{ display: 'flex', borderBottom: `1px solid ${ck.bd2}`, background: ck.bg1 }}
+                      onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.background = ck.bg4}
+                      onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.background = ck.bg1}>
                       {/* Row handle */}
                       <div style={{ ...cellStyle, width: 28, minWidth: 28, flexDirection: 'column', gap: 0, cursor: 'pointer' }}>
                         <button onClick={() => cmsReorderRecord(activeCol, record.id, -1)} disabled={idx === 0}
@@ -2027,11 +2071,13 @@ Always pick ONE format (css or html) — never both.`;
                         );
                       })}
                       {/* Open full editor + delete */}
-                      <div style={{ ...cellStyle, width: 28, minWidth: 28, gap: 4, flexShrink: 0 }}>
+                      <div style={{ ...cellStyle, width: 60, minWidth: 60, gap: 4, flexShrink: 0, padding: '0 4px' }}>
                         <button onClick={() => { setRecordModal(record); setModalDraft({ ...record }); setActiveTab(col.fields[0]?.key ?? ''); setMdPreview(false); }}
-                          title="Open record" style={{ background: 'none', border: 'none', color: '#555', cursor: 'pointer', fontSize: 11, padding: 0 }}>↗</button>
+                          title="Open record editor"
+                          style={{ padding: '3px 7px', borderRadius: 5, fontSize: 10, fontWeight: 600, background: 'transparent', color: '#7c3aed', border: '1px solid #7c3aed', cursor: 'pointer' }}>Edit</button>
                         <button onClick={() => cmsDeleteRecord(activeCol, record.id)}
-                          title="Delete" style={{ background: 'none', border: 'none', color: '#555', cursor: 'pointer', fontSize: 11, padding: 0 }}>✕</button>
+                          title="Delete record"
+                          style={{ padding: '3px 7px', borderRadius: 5, fontSize: 10, fontWeight: 600, background: 'transparent', color: '#f87171', border: '1px solid #7f1d1d', cursor: 'pointer' }}>Del</button>
                       </div>
                     </div>
                   ))}
@@ -2048,16 +2094,16 @@ Always pick ONE format (css or html) — never both.`;
           {/* ── Schema editor ── */}
           {cmsView === 'schema' && activeCol && (
             <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <p style={{ color: '#666', fontSize: 11, marginBottom: 4 }}>Edit fields for <strong style={{ color: '#ccc' }}>{cmsData.collections[activeCol]?.label}</strong></p>
+              <p style={{ color: ck.tx2, fontSize: 11, marginBottom: 4 }}>Edit fields for <strong style={{ color: ck.tx1 }}>{cmsData.collections[activeCol]?.label}</strong></p>
               {schemaFields.map((f, i) => (
                 <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   <input value={f.label}
                     onChange={e => setSchemaFields(prev => prev.map((x, j) => j === i ? { ...x, label: e.target.value, key: cmsSlug(e.target.value) || x.key } : x))}
                     placeholder="Field label"
-                    style={{ flex: 1, background: '#1a1a1a', border: '1px solid #333', borderRadius: 6, padding: '6px 8px', color: '#ccc', fontSize: 12, outline: 'none' }} />
+                    style={{ flex: 1, background: ck.bg2, border: `1px solid ${ck.bd1}`, borderRadius: 6, padding: '6px 8px', color: ck.tx1, fontSize: 12, outline: 'none' }} />
                   <select value={f.type}
                     onChange={e => setSchemaFields(prev => prev.map((x, j) => j === i ? { ...x, type: e.target.value as CmsFieldType } : x))}
-                    style={{ background: '#1a1a1a', border: '1px solid #333', borderRadius: 6, padding: '6px 6px', color: '#888', fontSize: 11, outline: 'none' }}>
+                    style={{ background: ck.bg2, border: `1px solid ${ck.bd1}`, borderRadius: 6, padding: '6px 6px', color: ck.tx2, fontSize: 11, outline: 'none' }}>
                     {(['text','textarea','number','date','url','image-url'] as CmsFieldType[]).map(t => <option key={t} value={t}>{t}</option>)}
                   </select>
                   <button onClick={() => setSchemaFields(prev => prev.filter((_, j) => j !== i))}
@@ -2083,11 +2129,11 @@ Always pick ONE format (css or html) — never both.`;
             return (
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                 {/* Ask Claude bar */}
-                <div style={{ padding: '8px 12px', borderBottom: '1px solid #2a2a2a', display: 'flex', gap: 6, flexShrink: 0 }}>
+                <div style={{ padding: '8px 12px', borderBottom: `1px solid ${ck.bd1}`, display: 'flex', gap: 6, flexShrink: 0 }}>
                   <input value={templatePrompt} onChange={e => setTemplatePrompt(e.target.value)}
                     placeholder="Describe the record page design…"
                     onKeyDown={e => e.key === 'Enter' && !templateLoading && askClaudeForTemplate(activeCol, templatePrompt)}
-                    style={{ flex: 1, background: '#1a1a1a', border: '1px solid #333', borderRadius: 8, padding: '6px 10px', color: '#ccc', fontSize: 11, outline: 'none' }} />
+                    style={{ flex: 1, background: ck.bg2, border: `1px solid ${ck.bd1}`, borderRadius: 8, padding: '6px 10px', color: ck.tx1, fontSize: 11, outline: 'none' }} />
                   <button onClick={() => askClaudeForTemplate(activeCol, templatePrompt)} disabled={templateLoading}
                     style={{ padding: '6px 12px', background: '#f59e0b', color: '#000', border: 'none', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: templateLoading ? 'not-allowed' : 'pointer', opacity: templateLoading ? 0.6 : 1 }}>
                     {templateLoading ? '…' : '✦ Claude'}
