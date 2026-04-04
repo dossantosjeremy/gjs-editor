@@ -584,12 +584,47 @@ export const SiteEditor: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
+  // ── Code formatters ──────────────────────────────────────────────────────
+  const formatHtml = (raw: string): string => {
+    const VOID = new Set(['area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr']);
+    let indent = 0;
+    const pad = () => '  '.repeat(indent);
+    return raw
+      .replace(/>\s*</g, '>\n<')
+      .split('\n')
+      .flatMap(rawLine => {
+        const line = rawLine.trim();
+        if (!line) return [];
+        const isClose  = /^<\//.test(line);
+        const isOpen   = /^<[^/!?]/.test(line) && !line.endsWith('/>');
+        const tagMatch = line.match(/^<([a-zA-Z][a-zA-Z0-9-]*)/);
+        const tag      = tagMatch?.[1]?.toLowerCase() ?? '';
+        const selfClose = line.endsWith('/>') || VOID.has(tag);
+        const hasInlineClose = isOpen && new RegExp(`</${tag}>`,'i').test(line.slice(line.indexOf('>') + 1));
+        if (isClose) indent = Math.max(0, indent - 1);
+        const out = pad() + line;
+        if (isOpen && !selfClose && !hasInlineClose) indent++;
+        return [out];
+      })
+      .join('\n');
+  };
+
+  const formatCss = (raw: string): string => {
+    return raw
+      .replace(/\s*\{\s*/g, ' {\n  ')
+      .replace(/;\s*/g, ';\n  ')
+      .replace(/\s*\}\s*/g, '\n}\n')
+      .replace(/  \n}/g, '\n}')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  };
+
   // ── Code editor panel ────────────────────────────────────────────────────
   const openCodeEditor = () => {
     const editor = editorRef.current;
     if (!editor) return;
-    setCodeHtml(editor.getHtml());
-    setCodeCss(editor.getCss() ?? '');
+    setCodeHtml(formatHtml(editor.getHtml()));
+    setCodeCss(formatCss(editor.getCss() ?? ''));
     setCodeTab('html');
     setCodeEditorOpen(true);
   };
@@ -998,18 +1033,18 @@ Design it as a clean, readable article/detail page that showcases one record.`;
     const editor = editorRef.current;
     if (!editor) return;
     const col = cmsData.collections[colKey];
-    const originalHtml = editor.getHtml();
-    const originalCss  = editor.getCss() ?? '';
+    const origPageKey = activePageRef.current?.key ?? '';
+    const tempId = `__tmpl-card-${colKey}__`;
     // Load the current template — strip any embedded <style> tag from old format
     const rawTmpl = col.template || defaultListTemplate(col);
     const styleInTmpl = rawTmpl.match(/^<style[^>]*>([\s\S]*?)<\/style>\s*/i);
     const templateHtml = styleInTmpl ? rawTmpl.slice(styleInTmpl[0].length) : rawTmpl;
-    editor.setComponents(templateHtml);
-    // Load page CSS into the canvas so .cms-card class is editable in Style Manager.
-    // If the page doesn't have .cms-card yet, inject the defaults.
-    const canvasCss = originalCss.includes('.cms-card') ? originalCss : (originalCss + CMS_CARD_CSS);
-    editor.setStyle(canvasCss);
-    setTemplateMode({ colKey, originalHtml, originalCss });
+    const origCss = editor.getCss() ?? '';
+    const canvasCss = origCss.includes('.cms-card') ? origCss : (origCss + CMS_CARD_CSS);
+    // Create a temporary page so the active page is never modified
+    if (editor.Pages.get(tempId)) editor.Pages.remove(tempId);
+    editor.Pages.add({ id: tempId, name: `Card template: ${col.label}`, component: templateHtml, styles: canvasCss }, { select: true });
+    setTemplateMode({ colKey, originalHtml: '', originalCss: origCss, _origPageKey: origPageKey, _tempPageId: tempId } as any);
     setCmsOpen(false);
   };
 
@@ -1020,7 +1055,6 @@ Design it as a clean, readable article/detail page that showcases one record.`;
     const css  = editor.getCss() ?? '';
     const col  = cmsData.collections[templateMode.colKey];
     if (templateMode.isRecord) {
-      // Reconstruct full-page record template
       const titleKey = col?.fields[0]?.key ?? 'title';
       const fullTemplate = [
         '<!DOCTYPE html><html lang="en"><head>',
@@ -1031,14 +1065,13 @@ Design it as a clean, readable article/detail page that showcases one record.`;
       ].join('\n');
       await saveCollectionTemplate(templateMode.colKey, col.template ?? '', fullTemplate);
     } else {
-      // Card template — save HTML only. CSS lives in the page (shared .cms-card class).
       await saveCollectionTemplate(templateMode.colKey, html, col.recordTemplate ?? '');
     }
-    editor.setComponents(templateMode.originalHtml);
-    // Restore page with the updated CSS (includes any .cms-card edits made in template mode)
-    editor.setStyle(css);
+    // Return to original page — remove the temp editing page
+    const tm = templateMode as any;
+    if (tm._tempPageId && editor.Pages.get(tm._tempPageId)) editor.Pages.remove(tm._tempPageId);
+    if (tm._origPageKey && editor.Pages.get(tm._origPageKey)) editor.Pages.select(tm._origPageKey);
     setTemplateMode(null);
-    // Return to CMS panel at the table view
     setCmsOpen(true);
     setCmsView('table');
   };
@@ -1046,10 +1079,10 @@ Design it as a clean, readable article/detail page that showcases one record.`;
   const cancelTemplateMode = () => {
     const editor = editorRef.current;
     if (!editor || !templateMode) return;
-    editor.setComponents(templateMode.originalHtml);
-    editor.setStyle(templateMode.originalCss);
+    const tm = templateMode as any;
+    if (tm._tempPageId && editor.Pages.get(tm._tempPageId)) editor.Pages.remove(tm._tempPageId);
+    if (tm._origPageKey && editor.Pages.get(tm._origPageKey)) editor.Pages.select(tm._origPageKey);
     setTemplateMode(null);
-    // Return to CMS panel at the table view
     setCmsOpen(true);
     setCmsView('table');
   };
@@ -1058,18 +1091,17 @@ Design it as a clean, readable article/detail page that showcases one record.`;
     const editor = editorRef.current;
     if (!editor) return;
     const col = cmsData.collections[colKey];
-    const originalHtml = editor.getHtml();
-    const originalCss  = editor.getCss() ?? '';
+    const origPageKey = activePageRef.current?.key ?? '';
+    const tempId = `__tmpl-record-${colKey}__`;
     const tmpl = col.recordTemplate || defaultRecordTemplate(col);
-    // Extract body content from the full-page template
     const bodyMatch = tmpl.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
     const bodyContent = bodyMatch?.[1]?.trim() ?? tmpl;
-    // Extract CSS from <style> tags in <head>
     const styleMatches = [...tmpl.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)];
     const headCss = styleMatches.map((m: RegExpMatchArray) => m[1]).join('\n');
-    editor.setComponents(bodyContent);
-    editor.setStyle(headCss || '');
-    setTemplateMode({ colKey, originalHtml, originalCss, isRecord: true });
+    // Create a temporary page — never touches the active page
+    if (editor.Pages.get(tempId)) editor.Pages.remove(tempId);
+    editor.Pages.add({ id: tempId, name: `Record template: ${col.label}`, component: bodyContent, styles: headCss || '' }, { select: true });
+    setTemplateMode({ colKey, originalHtml: '', originalCss: '', isRecord: true, _origPageKey: origPageKey, _tempPageId: tempId } as any);
     setCmsOpen(false);
   };
 
@@ -1230,51 +1262,79 @@ Design it as a clean, readable article/detail page that showcases one record.`;
     setDeployStatus('saving');
     setDeployError(null);
     setDeployUrl(null);
-    // Save ALL pages using live GrapesJS state (includes unsaved edits, all pages)
-    const pages = site.pages;
-    for (const page of pages) {
-      let html: string, css: string;
+
+    // ── Step 1: Build full HTML per page from live GrapesJS state ─────────
+    const buildPageHtml = (label: string, bodyHtml: string, pageCss: string) =>
+      `<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>${label}</title>\n<style>\n${pageCss}\n</style>\n</head>\n<body>\n${bodyHtml}\n</body>\n</html>`;
+
+    type PageFile = { key: string; label: string; html: string };
+    const pageFiles: PageFile[] = [];
+
+    for (const page of site.pages) {
+      let bodyHtml = '', pageCss = '';
       const gjsPage = editor.Pages.get(page.key);
       if (gjsPage) {
-        // Live in-memory content — works even if the page was never explicitly saved
         const comp = gjsPage.getMainComponent();
-        html = editor.getHtml({ component: comp }) ?? '';
-        css  = editor.getCss({ component: comp }) ?? '';
+        bodyHtml = editor.getHtml({ component: comp }) ?? '';
+        pageCss  = editor.getCss({ component: comp }) ?? '';
       } else {
-        // Fallback to storage for any page not in GrapesJS
         const stored = await getPageContent(siteId!, page.key);
         if (!stored) continue;
-        html = stored.html;
-        css  = stored.css;
+        bodyHtml = stored.html; pageCss = stored.css;
       }
-      // Persist to storage and to disk (for dev-server deploy endpoint)
-      await savePageContent(siteId!, page.key, html, css);
+      // Persist to local storage
+      await savePageContent(siteId!, page.key, bodyHtml, pageCss);
       setSavedPages(prev => ({ ...prev, [page.key]: true }));
-      await fetch('/api/save-page', {
+      // Also try dev-server save (no-op in production)
+      fetch('/api/save-page', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ siteId, pageKey: page.key, pageLabel: page.label, html, css }),
+        body: JSON.stringify({ siteId, pageKey: page.key, pageLabel: page.label, html: bodyHtml, css: pageCss }),
       }).catch(() => {});
+      pageFiles.push({ key: page.key, label: page.label, html: buildPageHtml(page.label, bodyHtml, pageCss) });
     }
+
+    // ── Step 2: Build Vercel files array (with /about/index.html aliases) ──
+    const vercelFiles: { file: string; data: string; encoding: string }[] = [];
+    for (const pf of pageFiles) {
+      vercelFiles.push({ file: `${pf.key}.html`, data: pf.html, encoding: 'utf-8' });
+      if (pf.key === 'home' || pf.key === 'index') {
+        vercelFiles.push({ file: 'index.html', data: pf.html, encoding: 'utf-8' });
+      } else {
+        vercelFiles.push({ file: `${pf.key}/index.html`, data: pf.html, encoding: 'utf-8' });
+      }
+    }
+
     setDeployStatus('deploying');
     try {
-      const res = await fetch('/api/deploy-vercel', {
+      const projectName = (site.name || siteId!)
+        .toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 40);
+
+      // Call Vercel API directly — works both locally and in production
+      const res = await fetch('https://api.vercel.com/v13/deployments', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ siteId, siteName: site.name, vercelToken }),
+        headers: {
+          'Authorization': `Bearer ${vercelToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: projectName,
+          files: vercelFiles,
+          projectSettings: { framework: null },
+          target: 'production',
+        }),
       });
-      // Guard: res.json() throws if body is empty (e.g. middleware crash or Vercel timeout)
       const rawText = await res.text();
       let data: any;
       try { data = JSON.parse(rawText); } catch {
-        data = { error: `Server returned HTTP ${res.status} with non-JSON body: ${rawText.slice(0, 200) || '(empty)'}` };
+        data = { error: `Vercel returned HTTP ${res.status}: ${rawText.slice(0, 200) || '(empty)'}` };
       }
-      if (!res.ok || !data.ok) {
+      if (!res.ok) {
         setDeployStatus('error');
-        setDeployError(data.error ?? 'Deployment failed.');
+        setDeployError(data.error?.message ?? data.error ?? `Vercel HTTP ${res.status}`);
       } else {
         setDeployStatus('done');
-        setDeployUrl(data.url);
+        setDeployUrl(data.url ? `https://${data.url}` : null);
       }
     } catch (err: any) {
       setDeployStatus('error');
@@ -1849,20 +1909,6 @@ Always pick ONE format (css or html) — never both.`;
           <span style={{ fontSize: 11, color: '#555', flexShrink: 0 }}>Loading…</span>
         )}
 
-        {/* Device switcher */}
-        {[{ name: 'Desktop', icon: '🖥' }, { name: 'Tablet', icon: '📱' }, { name: 'Mobile', icon: '📲' }].map(d => (
-          <button
-            key={d.name}
-            onClick={() => handleDevice(d.name)}
-            title={d.name}
-            style={{ padding: '4px 7px', borderRadius: 6, fontSize: 13, background: 'transparent', color: '#666', border: '1px solid #2a2a2a', cursor: 'pointer', flexShrink: 0 }}
-          >
-            {d.icon}
-          </button>
-        ))}
-
-        <div style={{ width: 1, height: 20, background: lightTheme ? '#d2d2d7' : '#2a2a2a', flexShrink: 0 }} />
-
         {/* Reset */}
         <button
           onClick={handleReset}
@@ -1959,10 +2005,13 @@ Always pick ONE format (css or html) — never both.`;
             // Handles href="./menu.html", href="/menu", href="menu" etc.
             // homeKey: the key used for the root "/" — first page key (usually "home")
             const homeKey = site.pages[0]?.key ?? 'home';
+            // Mobile nav fix: makes checkbox hamburgers and JS-based hamburgers work in preview
+            const mobileNavScript = `<script>(function(){function fix(){document.querySelectorAll('label[for]').forEach(function(lbl){var id=lbl.getAttribute('for');var cb=document.getElementById(id);if(cb&&cb.type==='checkbox'){lbl.addEventListener('click',function(){setTimeout(function(){var c=document.getElementById(id);var open=c&&c.checked;document.querySelectorAll('nav ul,nav ol,.nav-links,.nav-menu,.menu-links,.mobile-nav').forEach(function(el){el.style.display=open?'flex':'none';if(open)el.style.flexDirection='column';});},20);});}});document.querySelectorAll('.hamburger,.nav-hamburger,.burger,[class*="hamburger"],[class*="burger"]').forEach(function(btn){if(btn.tagName==='LABEL')return;btn.addEventListener('click',function(){var nav=document.querySelector('nav ul,.nav-links,.nav-menu,.menu-links,.mobile-nav');if(nav){var vis=nav.style.display==='flex';nav.style.display=vis?'none':'flex';nav.style.flexDirection='column';}});});}if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',fix);}else{fix();}})();<\/script>`;
             const navScript = `<script>(function(){var n=${JSON.stringify(pass1Urls)};var home=${JSON.stringify(homeKey)};document.addEventListener('click',function(e){var a=e.target&&e.target.closest?e.target.closest('a[href]'):null;if(!a)return;var h=a.getAttribute('href')||'';if(!h||h.startsWith('#')||h.startsWith('http')||h.startsWith('//'))return;e.preventDefault();var s=h.replace(/^[.\\/]+/,'').replace(/\\.html?$/i,'').toLowerCase()||home;if(n[s])window.location.href=n[s];},true);})();<\/script>`;
+            const injectScripts = mobileNavScript + '\n' + navScript;
 
-            // Step 5: Open current page with nav script injected
-            const currentHtml = replaceCmsLinks(pageHtmls[activePage.key].html).replace('</body>', navScript + '\n</body>');
+            // Step 5: Open current page with all scripts injected
+            const currentHtml = replaceCmsLinks(pageHtmls[activePage.key].html).replace('</body>', injectScripts + '\n</body>');
             const url = URL.createObjectURL(new Blob([currentHtml], { type: 'text/html' }));
             window.open(url, '_blank');
           }}
@@ -2503,9 +2552,6 @@ Always pick ONE format (css or html) — never both.`;
                   <button onClick={() => { enterRecordTemplateMode(activeCol); setCmsOpen(false); }}
                     title="Open the record page template in the canvas"
                     style={{ padding: '5px 12px', background: 'transparent', color: '#a78bfa', border: '1px solid #a78bfa', borderRadius: 9999, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>📄 Record</button>
-                  <button onClick={() => syncCardTemplateFromPage(activeCol)}
-                    title="Read the first card you edited on the page and save its design as the template for ALL cards"
-                    style={{ padding: '5px 12px', background: 'transparent', color: '#34d399', border: '1px solid #34d399', borderRadius: 9999, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>📌 Sync</button>
                 </div>
 
                 {/* Snippet layout picker */}
