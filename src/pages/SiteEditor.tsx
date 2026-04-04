@@ -4,6 +4,9 @@ import { CodeEditor } from '../components/CodeEditor';
 // @ts-ignore — grapesjs types are loose
 import grapesjs from 'grapesjs';
 import 'grapesjs/dist/css/grapes.min.css';
+// @ts-ignore — no types for grapesjs-navbar
+import navbarPlugin from 'grapesjs-navbar';
+import JSZip from 'jszip';
 import {
   getSite, updateSite, addPage, removePage,
   getPageContent, savePageContent, deletePageContent, hasPageContent,
@@ -179,6 +182,14 @@ export const SiteEditor: React.FC = () => {
   const [codeHtml,       setCodeHtml]       = useState('');
   const [codeCss,        setCodeCss]        = useState('');
   const [codeTab,        setCodeTab]        = useState<'html' | 'css'>('html');
+
+  // Import modal
+  const [importOpen,    setImportOpen]    = useState(false);
+  const [importHtml,    setImportHtml]    = useState('');
+  const [importCss,     setImportCss]     = useState('');
+  const [importTab,     setImportTab]     = useState<'paste' | 'zip'>('paste');
+  const [importStatus,  setImportStatus]  = useState('');
+  const importFileRef   = useRef<HTMLInputElement>(null);
 
   // Deploy modal
   const [deployOpen,    setDeployOpen]    = useState(false);
@@ -360,6 +371,8 @@ export const SiteEditor: React.FC = () => {
       noticeOnUnload: false,
       allowScripts: true,
       pageManager: { pages: [] },
+      plugins: [navbarPlugin],
+      pluginsOpts: {} as Record<string, unknown>,
       deviceManager: {
         devices: [
           { name: 'Desktop', width: '' },
@@ -539,8 +552,11 @@ export const SiteEditor: React.FC = () => {
   const handleSave = async () => {
     const editor = editorRef.current;
     if (!editor || status !== 'ready' || !activePage) return;
-    const html = editor.getHtml();
-    const css  = editor.getCss() ?? '';
+    // Use explicit per-page component extraction to guard against any page-selection mismatch
+    const gjsPage = editor.Pages.get(activePage.key);
+    const comp    = gjsPage?.getMainComponent();
+    const html    = comp ? (editor.getHtml({ component: comp }) ?? '') : editor.getHtml();
+    const css     = comp ? (editor.getCss({ component: comp }) ?? '') : (editor.getCss() ?? '');
     await savePageContent(siteId!, activePage.key, html, css);
     setSavedPages(prev => ({ ...prev, [activePage.key]: true }));
     setSite(await getSite(siteId!));
@@ -565,6 +581,109 @@ export const SiteEditor: React.FC = () => {
   const handleDevice = (name: string) => editorRef.current?.setDevice(name);
   const handleUndo   = () => editorRef.current?.runCommand('core:undo');
   const handleRedo   = () => editorRef.current?.runCommand('core:redo');
+
+  // ── Import ───────────────────────────────────────────────────────────────────
+  const applyImportPaste = () => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    // Strip full HTML boilerplate if the user pasted a full page
+    let body = importHtml;
+    const bodyMatch = body.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+    if (bodyMatch) body = bodyMatch[1].trim();
+    // Extract <style> blocks from pasted HTML if no separate CSS provided
+    let css = importCss;
+    if (!css.trim()) {
+      const styleTags = [...body.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)];
+      css = styleTags.map(m => m[1]).join('\n');
+      body = body.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+    }
+    editor.setComponents(body.trim());
+    if (css.trim()) editor.setStyle(css.trim());
+    setImportOpen(false);
+    setImportHtml('');
+    setImportCss('');
+    setImportStatus('');
+  };
+
+  const handleImportZip = async (file: File) => {
+    setImportStatus('Reading ZIP…');
+    try {
+      const zip  = await JSZip.loadAsync(file);
+      const pages: { key: string; label: string; html: string; css: string }[] = [];
+      const errors: string[] = [];
+
+      // Collect all HTML files in the ZIP
+      const htmlFiles = Object.keys(zip.files).filter(n => /\.html?$/i.test(n) && !zip.files[n].dir);
+      if (htmlFiles.length === 0) { setImportStatus('No HTML files found in ZIP.'); return; }
+
+      for (const filename of htmlFiles) {
+        try {
+          const raw   = await zip.files[filename].async('string');
+          const label = filename.replace(/^.*\//, '').replace(/\.html?$/i, '');
+          const key   = slugify(label) || 'page';
+          // Extract body content
+          const bodyMatch = raw.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+          let   body  = bodyMatch?.[1]?.trim() ?? raw;
+          // Extract CSS from <style> tags and any linked .css in the ZIP
+          const styleTags = [...raw.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)];
+          let css = styleTags.map(m => m[1]).join('\n');
+          // Try to load any linked CSS files from the ZIP
+          const linkRefs = [...raw.matchAll(/href=["']([^"']+\.css)["']/gi)].map(m => m[1]);
+          for (const href of linkRefs) {
+            const cssKey = Object.keys(zip.files).find(n => n.endsWith(href.replace(/^.*\//, '')) && !zip.files[n].dir);
+            if (cssKey) { try { css += '\n' + await zip.files[cssKey].async('string'); } catch {} }
+          }
+          body = body.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+          pages.push({ key, label, html: body.trim(), css: css.trim() });
+        } catch (e) {
+          errors.push(filename);
+        }
+      }
+
+      if (pages.length === 0) { setImportStatus('Could not parse any pages from ZIP.'); return; }
+
+      const editor = editorRef.current;
+      if (!editor) return;
+
+      // Load first page into current canvas; create new pages for the rest
+      for (let i = 0; i < pages.length; i++) {
+        const p = pages[i];
+        if (i === 0) {
+          // Load into current active page
+          editor.setComponents(p.html);
+          if (p.css) editor.setStyle(p.css);
+        } else {
+          // Check if page key already exists
+          const current = site?.pages.map(pg => pg.key) ?? [];
+          let uniqueKey = p.key; let n = 2;
+          while (current.includes(uniqueKey) || pages.slice(0, i).some(pp => pp.key === uniqueKey)) {
+            uniqueKey = `${p.key}-${n}`; n++;
+          }
+          const newPage: SitePage = { key: uniqueKey, label: p.label };
+          await addPage(siteId!, newPage);
+          await savePageContent(siteId!, uniqueKey, p.html, p.css);
+          if (editor && !editor.Pages.get(uniqueKey)) {
+            editor.Pages.add({ id: uniqueKey, name: p.label, component: p.html, styles: p.css }, { select: false });
+          }
+        }
+      }
+
+      setSite(await getSite(siteId!));
+      setSavedPages(prev => {
+        const u = { ...prev };
+        pages.slice(1).forEach(p => { u[p.key] = true; });
+        return u;
+      });
+
+      const msg = errors.length > 0
+        ? `Imported ${pages.length} page(s). Skipped ${errors.length} file(s) with errors.`
+        : `Imported ${pages.length} page(s) successfully.`;
+      setImportStatus(msg);
+      setTimeout(() => { setImportOpen(false); setImportStatus(''); }, 2000);
+    } catch (err: any) {
+      setImportStatus(`Error: ${err.message}`);
+    }
+  };
 
   const handleExport = () => {
     const editor = editorRef.current;
@@ -1807,9 +1926,22 @@ Always pick ONE format (css or html) — never both.`;
   const handleRestoreSnapshot = (snap: Snapshot) => {
     if (!confirm(`Restore snapshot from ${formatTs(snap.ts)}? Unsaved changes will be lost.`)) return;
     const editor = editorRef.current;
-    if (!editor) return;
+    if (!editor || !activePage) return;
+    // Ensure the correct GrapesJS page is selected before restoring
+    const gjsPage = editor.Pages.get(activePage.key);
+    if (gjsPage) editor.Pages.select(activePage.key);
     editor.setComponents(snap.html);
     editor.setStyle(snap.css);
+    // Truncate history: keep only snapshots at or older than this one,
+    // and prepend a new "Restored" entry so Save works from a clean state.
+    setSnapshots(prev => {
+      const idx = prev.findIndex(s => s.ts === snap.ts);
+      const kept = idx >= 0 ? prev.slice(idx) : [snap];
+      const entry: Snapshot = { ts: Date.now(), label: `Restored · ${formatTs(snap.ts)}`, html: snap.html, css: snap.css };
+      const next = [entry, ...kept];
+      savePageHistory(siteId!, activePage.key, next);
+      return next;
+    });
     setHistoryOpen(false);
   };
 
@@ -2036,6 +2168,20 @@ Always pick ONE format (css or html) — never both.`;
           }}
         >
           ↑ Deploy
+        </button>
+
+        {/* Import */}
+        <button
+          onClick={() => setImportOpen(true)}
+          disabled={status !== 'ready'}
+          style={{
+            padding: '4px 10px', borderRadius: 9999, fontSize: 11, flexShrink: 0,
+            background: 'transparent', color: lightTheme ? '#555' : '#888', border: `1px solid ${lightTheme ? '#c7c7cc' : '#2a2a2a'}`,
+            cursor: status === 'ready' ? 'pointer' : 'default',
+            opacity: status === 'ready' ? 1 : 0.4,
+          }}
+        >
+          Import ↑
         </button>
 
         {/* Export */}
@@ -3230,6 +3376,92 @@ Always pick ONE format (css or html) — never both.`;
               <div style={{ background: '#1f0d0d', border: '1px solid #dc2626', borderRadius: 10, padding: '12px 14px' }}>
                 <p style={{ color: '#f87171', fontSize: 12 }}>✗ {deployError}</p>
                 <button onClick={() => setDeployStatus('idle')} style={{ marginTop: 10, background: 'transparent', color: '#888', border: '1px solid #333', borderRadius: 9999, padding: '5px 14px', fontSize: 11, cursor: 'pointer' }}>Try again</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Import modal ── */}
+      {importOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+          <div style={{ background: '#1a1a1a', border: '1px solid #333', borderRadius: 16, padding: 28, width: 580, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+              <p style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>Import ↑</p>
+              <button onClick={() => { setImportOpen(false); setImportHtml(''); setImportCss(''); setImportStatus(''); }} style={{ color: '#555', background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, lineHeight: 1 }}>×</button>
+            </div>
+
+            {/* Tabs */}
+            <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: '#111', borderRadius: 10, padding: 4 }}>
+              {(['paste', 'zip'] as const).map(tab => (
+                <button key={tab} onClick={() => setImportTab(tab)}
+                  style={{ flex: 1, padding: '7px 0', borderRadius: 8, border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                    background: importTab === tab ? '#2a2a2a' : 'transparent',
+                    color: importTab === tab ? '#fff' : '#555' }}>
+                  {tab === 'paste' ? 'Paste HTML / CSS' : 'Import ZIP'}
+                </button>
+              ))}
+            </div>
+
+            {importTab === 'paste' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
+                <div style={{ flex: 2, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                  <label style={{ fontSize: 11, color: '#555', marginBottom: 4 }}>HTML (full page or body fragment)</label>
+                  <textarea
+                    value={importHtml}
+                    onChange={e => setImportHtml(e.target.value)}
+                    placeholder="Paste your HTML here…"
+                    style={{ flex: 1, resize: 'none', background: '#111', border: '1px solid #2a2a2a', borderRadius: 8, padding: '10px 12px', color: '#ccc', fontSize: 11, fontFamily: 'monospace', lineHeight: 1.6, outline: 'none', minHeight: 160 }}
+                  />
+                </div>
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                  <label style={{ fontSize: 11, color: '#555', marginBottom: 4 }}>CSS (optional — leave blank to extract from HTML)</label>
+                  <textarea
+                    value={importCss}
+                    onChange={e => setImportCss(e.target.value)}
+                    placeholder="Paste CSS here… or leave blank to auto-extract from <style> tags"
+                    style={{ flex: 1, resize: 'none', background: '#111', border: '1px solid #2a2a2a', borderRadius: 8, padding: '10px 12px', color: '#ccc', fontSize: 11, fontFamily: 'monospace', lineHeight: 1.6, outline: 'none', minHeight: 80 }}
+                  />
+                </div>
+                <button
+                  onClick={applyImportPaste}
+                  disabled={!importHtml.trim()}
+                  style={{ padding: '10px 0', borderRadius: 9999, background: importHtml.trim() ? '#0066cc' : '#0d1f3c', color: importHtml.trim() ? '#fff' : '#444', border: 'none', fontSize: 13, fontWeight: 700, cursor: importHtml.trim() ? 'pointer' : 'not-allowed' }}
+                >
+                  Apply to canvas →
+                </button>
+              </div>
+            )}
+
+            {importTab === 'zip' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: 1 }}>
+                <p style={{ fontSize: 12, color: '#666', lineHeight: 1.6, margin: 0 }}>
+                  Upload a ZIP containing HTML and CSS files. The first .html file becomes the current page; additional .html files are added as new pages.
+                </p>
+                <input
+                  ref={importFileRef}
+                  type="file"
+                  accept=".zip"
+                  style={{ display: 'none' }}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) handleImportZip(f); e.target.value = ''; }}
+                />
+                <div
+                  onClick={() => importFileRef.current?.click()}
+                  onDragOver={e => { e.preventDefault(); (e.currentTarget as HTMLElement).style.borderColor = '#0066cc'; }}
+                  onDragLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = '#2a2a2a'; }}
+                  onDrop={e => { e.preventDefault(); (e.currentTarget as HTMLElement).style.borderColor = '#2a2a2a'; const f = e.dataTransfer.files[0]; if (f) handleImportZip(f); }}
+                  style={{ border: '2px dashed #2a2a2a', borderRadius: 12, padding: '40px 20px', textAlign: 'center', cursor: 'pointer', transition: 'border-color 0.2s' }}
+                >
+                  <div style={{ fontSize: 32, marginBottom: 10 }}>📦</div>
+                  <p style={{ color: '#666', fontSize: 13, margin: 0 }}>Click to choose ZIP file</p>
+                  <p style={{ color: '#444', fontSize: 11, marginTop: 4 }}>or drag and drop here</p>
+                </div>
+                {importStatus && (
+                  <div style={{ background: importStatus.startsWith('Error') ? '#1f0d0d' : '#0d1a0d', border: `1px solid ${importStatus.startsWith('Error') ? '#7f1d1d' : '#14532d'}`, borderRadius: 8, padding: '10px 14px' }}>
+                    <p style={{ color: importStatus.startsWith('Error') ? '#f87171' : '#4ade80', fontSize: 12, margin: 0 }}>{importStatus}</p>
+                  </div>
+                )}
               </div>
             )}
           </div>
