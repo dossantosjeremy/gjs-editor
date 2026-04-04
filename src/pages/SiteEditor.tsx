@@ -479,7 +479,7 @@ export const SiteEditor: React.FC = () => {
     // ── Eagerly populate all pages via GrapesJS Pages API ────────────────
     (async () => {
       // Remove any default page GrapesJS auto-created
-      editor.Pages.getAll().models.slice().forEach((p: any) => editor.Pages.remove(p));
+      editor.Pages.getAll().slice().forEach((p: any) => editor.Pages.remove(p));
 
       const blankHtml = '<div style="padding:80px 32px;text-align:center;font-family:-apple-system,sans-serif;color:#86868b"><p style="font-size:16px">Drag blocks from the panel on the right to start building.</p></div>';
 
