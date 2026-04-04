@@ -106,6 +106,7 @@ export const SiteEditor: React.FC = () => {
   const capturedLinksRef   = useRef<string[]>([]);
   const historyDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activePageRef      = useRef<SitePage | null>(null);
+  const siteRef            = useRef<typeof site>(null);
 
   // Claude chat state
   type Attachment = { name: string; kind: 'image' | 'pdf' | 'text'; mediaType: string; data: string; preview?: string };
@@ -153,6 +154,11 @@ export const SiteEditor: React.FC = () => {
   const [cmsRecordTemplate,  setCmsRecordTemplate]  = useState('');
   const [templatePrompt,     setTemplatePrompt]     = useState('');
   const [templateLoading,    setTemplateLoading]    = useState(false);
+
+  // Pages panel state
+  const [pagesOpen,       setPagesOpen]       = useState(false);
+  const [renamingPageKey, setRenamingPageKey] = useState<string | null>(null);
+  const [renameInputVal,  setRenameInputVal]  = useState('');
 
   // Add / delete page modal state
   const [addPageOpen,  setAddPageOpen]  = useState(false);
@@ -250,9 +256,10 @@ export const SiteEditor: React.FC = () => {
         .gjs-sm-sectors{background:#fff!important}
         .gjs-sm-sector{border-color:#e8e8ed!important;background:#fff!important}
         .gjs-sm-sector-title{background:#f5f5f7!important;color:#1d1d1f!important;border-color:#e8e8ed!important}
-        .gjs-sm-label{color:#555!important}
+        .gjs-sm-label{color:#1d1d1f!important}
         .gjs-sm-preview-file{border-color:#d2d2d7!important}
         .gjs-sm-properties,.gjs-sm-property{color:#1d1d1f!important}
+        .gjs-sm-property .gjs-field-integer input,.gjs-sm-property select{color:#1d1d1f!important}
         /* ── Toolbar ── */
         .gjs-toolbar{background:#ffffff!important;border-color:#d2d2d7!important;box-shadow:0 2px 8px rgba(0,0,0,0.08)!important}
         .gjs-toolbar-item{color:#1d1d1f!important}
@@ -263,12 +270,14 @@ export const SiteEditor: React.FC = () => {
         [data-light-panel]{background:#ffffff!important;border-color:#d2d2d7!important;color:#1d1d1f!important}
         [data-light-panel] *{color:#1d1d1f}
         [data-light-panel] input,[data-light-panel] select,[data-light-panel] textarea{background:#f5f5f7!important;color:#1d1d1f!important;border-color:#d2d2d7!important}
-        [data-light-panel] button{color:#555!important}
       `;
     } else {
       el?.remove();
     }
   }, [lightTheme]);
+
+  // Keep siteRef in sync so canvas click handler can access current pages
+  useEffect(() => { siteRef.current = site; }, [site]);
 
   // ── Load initial site data ─────────────────────────────────────────────────
   useEffect(() => {
@@ -282,20 +291,12 @@ export const SiteEditor: React.FC = () => {
     });
   }, [siteId, navigate]);
 
-  // ── Load a page into GrapesJS ─────────────────────────────────────────────
+  // ── Load a page into GrapesJS (sourceUrl capture only) ───────────────────
+  // Pages with saved content are pre-loaded via the Pages API on editor init.
+  // This function is only called when a page has a sourceUrl but no saved content yet.
   const loadPage = useCallback(async (page: SitePage) => {
     const editor = editorRef.current;
     if (!editor) return;
-
-    const saved = await getPageContent(siteId!, page.key);
-
-    // If we have saved content, use it immediately — no URL capture needed
-    if (saved) {
-      editor.setComponents(saved.html);
-      editor.setStyle(saved.css);
-      setStatus('ready');
-      return;
-    }
 
     // If there's a sourceUrl, try to capture from it
     if (page.sourceUrl) {
@@ -341,13 +342,7 @@ export const SiteEditor: React.FC = () => {
       return;
     }
 
-    // Blank canvas
-    editor.setComponents(
-      '<div style="padding:80px 32px;text-align:center;font-family:-apple-system,sans-serif;color:#86868b">' +
-      '<p style="font-size:16px">Drag blocks from the panel on the right to start building.</p>' +
-      '</div>'
-    );
-    editor.setStyle('');
+    // No sourceUrl — page already pre-loaded via Pages API
     setStatus('ready');
   }, [siteId]);
 
@@ -364,6 +359,7 @@ export const SiteEditor: React.FC = () => {
       storageManager: false,
       noticeOnUnload: false,
       allowScripts: true,
+      pageManager: { pages: [] },
       deviceManager: {
         devices: [
           { name: 'Desktop', width: '' },
@@ -397,12 +393,40 @@ export const SiteEditor: React.FC = () => {
     editor.on('component:update', () => scheduleSnapshot('Auto-save'));
     editor.on('style:update',     () => scheduleSnapshot('Style change'));
 
-    // Re-inject CSS whenever the canvas frame reloads
+    // Re-inject CSS whenever the canvas frame reloads; also intercept internal link clicks
     editor.on('canvas:frame:load', () => {
       const canvasDoc = editor.Canvas.getDocument();
       if (canvasDoc) {
         if (capturedCssRef.current)          injectCss(canvasDoc, capturedCssRef.current);
         if (capturedLinksRef.current.length) injectLinks(canvasDoc, capturedLinksRef.current);
+
+        // Intercept internal link clicks → switch editor page instead of navigating the iframe
+        canvasDoc.addEventListener('click', (e: MouseEvent) => {
+          const anchor = (e.target as HTMLElement).closest('a[href]') as HTMLAnchorElement | null;
+          if (!anchor) return;
+          const href = anchor.getAttribute('href') || '';
+          // Let hash links and external URLs pass through normally
+          if (!href || href.startsWith('#') || href.startsWith('http') || href.startsWith('//') || href.startsWith('mailto:')) return;
+          // Always prevent navigation for internal links (avoids about:blank#blocked)
+          e.preventDefault();
+          e.stopPropagation();
+          // Normalise: strip leading ./ / ../  leading slashes, strip .html suffix, lowercase
+          // href="/" or bare "/" → falls back to first page key (homeKey)
+          const homeKey = siteRef.current?.pages[0]?.key ?? 'home';
+          const slug = href.replace(/^\.?\.?\/+/, '').split('/')[0].replace(/\.html?$/i, '').toLowerCase() || homeKey;
+          // Match by key (exact) or by label slug (e.g. "Our Story" → "our-story")
+          const page = siteRef.current?.pages.find(p =>
+            p.key === slug ||
+            p.label.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') === slug
+          );
+          if (page) {
+            setActivePage(page);
+            activePageRef.current = page;
+            setSaveLabel('Save Page');
+            getPageHistory(siteId!, page.key).then(setSnapshots);
+            editor.Pages.select(page.key);
+          }
+        }, true);
       }
     });
 
@@ -439,14 +463,43 @@ export const SiteEditor: React.FC = () => {
     bm.add('list-items', { label: 'List',       category: 'Collections', media: icon('<line x1="9" y1="6" x2="20" y2="6"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="18" x2="20" y2="18"/><circle cx="4" cy="6" r="1.5" fill="currentColor"/><circle cx="4" cy="12" r="1.5" fill="currentColor"/><circle cx="4" cy="18" r="1.5" fill="currentColor"/>'), content: '<ul style="list-style:none;padding:0;margin:0">' + ['Item one','Item two','Item three'].map(t => `<li style="display:flex;gap:12px;align-items:flex-start;padding:12px 0;border-bottom:1px solid #d2d2d7"><span style="width:8px;height:8px;border-radius:50%;background:#0066cc;flex-shrink:0;margin-top:6px"></span><span style="color:#1d1d1f">${t}</span></li>`).join('') + '</ul>' });
     bm.add('stats',      { label: 'Stats',      category: 'Collections', media: icon('<path d="M3 20h18M3 20V10l6-4 4 4 5-6v16"/>'), content: '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:24px;padding:48px 32px">' + [['98%','Satisfaction'],['2× faster','Delivery'],['40+','Projects']].map(([v,l]) => `<div style="text-align:center;background:#f5f5f7;border-radius:16px;padding:24px"><p style="font-size:2rem;font-weight:700;color:#0066cc;margin-bottom:4px">${v}</p><p style="font-size:13px;color:#86868b">${l}</p></div>`).join('') + '</div>' });
 
-    // Load first page
-    const firstPage = site.pages[0];
-    if (firstPage) {
-      activePageRef.current = firstPage;
-      setActivePage(firstPage);
-      getPageHistory(siteId!, firstPage.key).then(setSnapshots);
-      loadPage(firstPage);
-    }
+    // ── Eagerly populate all pages via GrapesJS Pages API ────────────────
+    (async () => {
+      // Remove any default page GrapesJS auto-created
+      editor.Pages.getAll().models.slice().forEach((p: any) => editor.Pages.remove(p));
+
+      const blankHtml = '<div style="padding:80px 32px;text-align:center;font-family:-apple-system,sans-serif;color:#86868b"><p style="font-size:16px">Drag blocks from the panel on the right to start building.</p></div>';
+
+      // Load all page content from storage in parallel
+      const allContent = await Promise.all(
+        site.pages.map(p => getPageContent(siteId!, p.key))
+      );
+
+      // Register every page in GrapesJS with its stored HTML/CSS
+      for (let i = 0; i < site.pages.length; i++) {
+        const page    = site.pages[i];
+        const content = allContent[i];
+        editor.Pages.add({
+          id:        page.key,
+          name:      page.label,
+          component: content?.html ?? blankHtml,
+          styles:    content?.css  ?? '',
+        }, { select: i === 0 });
+      }
+
+      const firstPage = site.pages[0];
+      if (firstPage) {
+        activePageRef.current = firstPage;
+        setActivePage(firstPage);
+        getPageHistory(siteId!, firstPage.key).then(setSnapshots);
+        // If first page has no saved content but has a sourceUrl, trigger iframe capture
+        if (!allContent[0] && firstPage.sourceUrl) {
+          loadPage(firstPage);
+        } else {
+          setStatus('ready');
+        }
+      }
+    })();
 
     return () => {
       editor.destroy();
@@ -456,11 +509,31 @@ export const SiteEditor: React.FC = () => {
 
   // ── Handlers ─────────────────────────────────────────────────────────────
   const handleSelectPage = async (page: SitePage) => {
+    const editor = editorRef.current;
     setActivePage(page);
     activePageRef.current = page;
     setSaveLabel('Save Page');
     setSnapshots(await getPageHistory(siteId!, page.key));
-    loadPage(page);
+    if (editor) {
+      const gjsPage = editor.Pages.get(page.key);
+      if (gjsPage) {
+        // Native page switch — instant, preserves unsaved edits
+        editor.Pages.select(page.key);
+        // If page has a sourceUrl but no content yet, trigger iframe capture on the now-selected page
+        const comp = gjsPage.getMainComponent();
+        const hasContent = comp && editor.getHtml({ component: comp })?.trim();
+        if (!hasContent && page.sourceUrl) {
+          loadPage(page);
+        } else {
+          setStatus('ready');
+        }
+      } else {
+        // Page not yet registered (edge case) — fall back to adding it first
+        const blankHtml = '<div style="padding:80px 32px;text-align:center;font-family:-apple-system,sans-serif;color:#86868b"><p style="font-size:16px">Drag blocks from the panel on the right to start building.</p></div>';
+        editor.Pages.add({ id: page.key, name: page.label, component: blankHtml, styles: '' }, { select: true });
+        if (page.sourceUrl) loadPage(page); else setStatus('ready');
+      }
+    }
   };
 
   const handleSave = async () => {
@@ -537,57 +610,125 @@ export const SiteEditor: React.FC = () => {
 
   useEffect(() => { if (cmsOpen) cmsLoad(); }, [cmsOpen, cmsLoad]);
 
-  // Re-renders the CMS section for colKey on the current GrapesJS canvas if it's already there.
-  // Called automatically after any record mutation so the page stays in sync.
+  // Auto-poll CMS data every 15 s while the panel is open to catch external changes
+  // (e.g. records added/deleted directly in Supabase). Refreshes canvas sections too.
+  useEffect(() => {
+    if (!cmsOpen || !siteId) return;
+    const id = setInterval(async () => {
+      const data = await getCmsData(siteId);
+      const prev = JSON.stringify(cmsData.collections);
+      const next = JSON.stringify(data.collections);
+      if (prev !== next) {
+        setCmsData(data);
+        for (const colKey of Object.keys(data.collections)) {
+          refreshCmsSectionOnPage(colKey, data);
+        }
+      }
+    }, 15000);
+    return () => clearInterval(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cmsOpen, siteId]);
+
+  // Walks the GrapesJS component tree to find a component with a matching attribute value.
+  const findComponentByAttr = (wrapper: any, attrName: string, attrValue: string): any => {
+    let found: any = null;
+    const walk = (comp: any) => {
+      if (found) return;
+      if ((comp.get('attributes') || {})[attrName] === attrValue) { found = comp; return; }
+      comp.get('components')?.each(walk);
+    };
+    wrapper.get('components')?.each(walk);
+    return found;
+  };
+
+  // Tags an HTML string's first opening element with data-cms-record-id so surgical
+  // refresh can identify which card corresponds to which record.
+  const tagCardHtml = (html: string, recordId: string) =>
+    html.replace(/^(<[a-zA-Z][^>]*)/, `$1 data-cms-record-id="${recordId}"`);
+
+  // Surgically updates cards inside the live-link container.
+  //
+  // CRITICAL RULE: existing card components are NEVER emptied or re-rendered.
+  // This preserves every visual customisation the user made in GrapesJS
+  // (card dimensions, image height, colours, custom classes, etc.).
+  //
+  // ADD  → appends only the brand-new card(s) one at a time.
+  // DELETE → removes only the matching card (tagged mode only).
+  // Legacy cards without data-cms-record-id are counted and only new records
+  // beyond that count are appended, so old customised cards are still untouched.
   const refreshCmsSectionOnPage = (colKey: string, cms: CmsData) => {
     const editor = editorRef.current;
     if (!editor) return;
     const col = cms.collections[colKey];
     if (!col) return;
-    const pageHtml = editor.getHtml() as string;
-    // Only refresh if this collection has the live-link marker on the page
-    if (!pageHtml.includes(`data-cms-cards="${colKey}"`)) return;
 
-    const rSlug = (r: Record<string, string>) => {
-      const base = (r[col.fields[0]?.key ?? ''] || '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 30);
-      return (base ? `${base}-` : '') + r.id;
-    };
-    const firstField = col.fields[0]?.key ?? 'title';
-    const imageField = col.fields.find(f => f.type === 'image-url')?.key ?? null;
-    const coverImg   = (r: Record<string, string>) => r._cover || (imageField ? r[imageField] : '');
-    const textFields = col.fields.filter(f => f.type !== 'image-url' && f.key !== firstField && f.type !== 'textarea');
-    const bodyField  = col.fields.find(f => f.type === 'textarea')?.key ?? null;
+    const wrapper = editor.Components.getWrapper();
+    const container = findComponentByAttr(wrapper, 'data-cms-cards', colKey);
+    if (!container) return;
 
-    let newCards: string;
-    if (col.records.length === 0) {
-      newCards = '<p style="color:#86868b;font-size:14px">No records yet. Add records in the CMS panel.</p>';
-    } else if (col.template) {
-      // Use custom card template
-      newCards = col.records.map(r =>
-        renderWithTokens(col.template!, { ...r, _cover: r._cover ?? '' }, col.fields, colKey)
-      ).join('\n');
-    } else {
-      // Default card rendering — class-based so GrapesJS Style Manager affects all cards
-      newCards = col.records.map(r => {
-        const cover = coverImg(r);
-        const img   = cover ? `<img src="${cover}" class="cms-card-img" onerror="this.style.display='none'" />` : '';
-        const body  = bodyField && r[bodyField]
-          ? `<div class="cms-card-excerpt">${mdToHtml(r[bodyField]).slice(0, 300)}</div>`
-          : textFields.map(f => r[f.key] ? `<p class="cms-card-meta">${r[f.key]}</p>` : '').join('');
-        const slug = rSlug(r);
-        return `<a href="${colKey}/${slug}.html" class="cms-card">${img}<div class="cms-card-body"><p class="cms-card-title">${r[firstField] || 'Untitled'}</p>${body}</div></a>`;
-      }).join('\n');
+    // ── Migrate legacy inline-style containers to class-based layout ──────────
+    // Old containers used style="display:grid..." which always beats #id CSS rules
+    // from Style Manager. Move inline styles → CSS class so user edits persist.
+    const containerClass = `cms-col-${colKey}`;
+    const containerAttrs = container.get('attributes') || {};
+    const hasClass = (containerAttrs['class'] || '').split(' ').includes(containerClass);
+    if (!hasClass) {
+      const inlineStyle = container.getStyle?.() || {};
+      const cssProps = Object.entries(inlineStyle).map(([k, v]) => `${k}:${v}`).join(';');
+      if (cssProps) {
+        const existing = editor.getCss() || '';
+        if (!existing.includes(`.${containerClass}`)) {
+          editor.setStyle(existing + `\n.${containerClass}{${cssProps}}`);
+        }
+        container.setStyle({});
+      }
+      const currentClass = (containerAttrs['class'] || '').trim();
+      container.addAttributes({ class: currentClass ? `${currentClass} ${containerClass}` : containerClass });
     }
 
-    // Replace ONLY the card items between the live-link markers.
-    // This preserves the section wrapper (heading, padding, background) and the
-    // grid container (column count, gap) that the user may have edited in GrapesJS.
-    const innerRegex = new RegExp(
-      `(data-cms-cards="${colKey}"[^>]*>)[\\s\\S]*?(<span[^>]+data-cms-end="${colKey}"[^>]*>)`,
-      'i'
-    );
-    const updated = pageHtml.replace(innerRegex, `$1\n${newCards}\n$2`);
-    if (updated !== pageHtml) editor.setComponents(updated);
+    const comps = container.get('components');
+    const template = col.template || defaultListTemplate(col);
+
+    // Catalogue existing children
+    const existingById = new Map<string, any>(); // tagged cards
+    let untaggedCount = 0;                       // legacy untagged cards
+
+    comps.each((child: any) => {
+      const attrs = child.get('attributes') || {};
+      if (attrs['data-cms-end']) return; // sentinel — skip
+      const rid = attrs['data-cms-record-id'];
+      if (rid) existingById.set(rid, child);
+      else untaggedCount++;
+    });
+
+    const totalExisting = existingById.size + untaggedCount;
+    const currentIds    = new Set(col.records.map(r => r.id));
+
+    // ── Tagged mode: add new + remove deleted ──────────────────────────────
+    if (existingById.size > 0) {
+      // Remove deleted
+      existingById.forEach((comp, rid) => {
+        if (!currentIds.has(rid)) comp.remove();
+      });
+      // Append each new record individually (never join+append — GrapesJS may wrap)
+      col.records.forEach(r => {
+        if (!existingById.has(r.id)) {
+          container.append(
+            tagCardHtml(renderWithTokens(template, { ...r, _cover: r._cover ?? '' }, col.fields, colKey), r.id)
+          );
+        }
+      });
+      return;
+    }
+
+    // ── Legacy / untagged mode ─────────────────────────────────────────────
+    // Never touch existing cards. Only append records beyond what's already shown.
+    const newRecords = col.records.slice(totalExisting);
+    newRecords.forEach(r => {
+      container.append(
+        tagCardHtml(renderWithTokens(template, { ...r, _cover: r._cover ?? '' }, col.fields, colKey), r.id)
+      );
+    });
   };
 
   const cmsSave = async (next: CmsData, refreshColKey?: string) => {
@@ -807,21 +948,24 @@ export const SiteEditor: React.FC = () => {
     setCmsData(next);
     if (siteId) await saveCmsData(siteId, next);
 
-    // Re-render card items for this collection on the current page (preserves section layout)
+    // Re-render all cards with the new template using the component API.
+    // Saving a template intentionally re-renders all cards (template change affects all).
+    // Container layout/style is preserved because we only replace children.
     const editor = editorRef.current;
     if (editor && template) {
       const col = next.collections[colKey];
-      const pageHtml = editor.getHtml() as string;
-      if (pageHtml.includes(`data-cms-cards="${colKey}"`)) {
-        const gridInner = col.records.map(r =>
-          renderWithTokens(template, { ...r, _cover: r._cover ?? '' }, col.fields, colKey)
-        ).join('\n');
-        const innerRegex = new RegExp(
-          `(data-cms-cards="${colKey}"[^>]*>)[\\s\\S]*?(<span[^>]+data-cms-end="${colKey}"[^>]*>)`,
-          'i'
-        );
-        const updated = pageHtml.replace(innerRegex, `$1\n${gridInner}\n$2`);
-        if (updated !== pageHtml) editor.setComponents(updated);
+      const wrapper = editor.Components.getWrapper();
+      const container = findComponentByAttr(wrapper, 'data-cms-cards', colKey);
+      if (container) {
+        container.empty();
+        if (col.records.length === 0) {
+          container.append(`<p style="color:#86868b;font-size:14px">No records yet. Add records in the CMS panel.</p><span data-cms-end="${colKey}" style="display:none"></span>`);
+        } else {
+          const html = col.records.map(r =>
+            tagCardHtml(renderWithTokens(template, { ...r, _cover: r._cover ?? '' }, col.fields, colKey), r.id)
+          ).join('\n');
+          container.append(html + `<span data-cms-end="${colKey}" style="display:none"></span>`);
+        }
       }
     }
   };
@@ -1053,14 +1197,20 @@ Design it as a clean, readable article/detail page that showcases one record.`;
     // Render via template for all non-table layouts (so the design is always linked)
     if (cardTemplate && layout !== 'table') {
       const gridInner = col.records.length > 0
-        ? col.records.map(r => renderWithTokens(cardTemplate, { ...r, _cover: r._cover ?? '' }, col.fields, colKey)).join('\n')
+        ? col.records.map(r => tagCardHtml(renderWithTokens(cardTemplate, { ...r, _cover: r._cover ?? '' }, col.fields, colKey), r.id)).join('\n')
         : '<p style="color:#86868b;font-size:14px">No records yet. Add records in the CMS panel.</p>';
-      const containerStyle = layout === 'grid'
-        ? 'display:grid;grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr));gap:20px'
+      const containerClass = `cms-col-${colKey}`;
+      const defaultColCss = layout === 'grid'
+        ? `.${containerClass}{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr));gap:20px}`
         : layout === 'cards'
-          ? 'display:flex;flex-direction:column;gap:12px'
-          : 'display:flex;flex-direction:column;gap:16px';
-      const snippet2 = `<section id="cms-${colKey}" data-cms="${colKey}" data-cms-layout="${layout}" style="padding:clamp(40px,6vw,80px) 0"><div style="max-width:1100px;margin:0 auto;padding:0 clamp(16px,5vw,40px)"><h2 style="font-size:clamp(1.4rem,4vw,2rem);font-weight:700;margin-bottom:24px">${col.label}</h2><div data-cms-cards="${colKey}" style="${containerStyle}">${gridInner}<span data-cms-end="${colKey}" style="display:none"></span></div></div></section>`;
+          ? `.${containerClass}{display:flex;flex-direction:column;gap:12px}`
+          : `.${containerClass}{display:flex;flex-direction:column;gap:16px}`;
+      // Inject default layout CSS as a named class so Style Manager edits persist
+      const existingCss = editor.getCss() || '';
+      if (!existingCss.includes(`.${containerClass}`)) {
+        editor.setStyle(existingCss + '\n' + defaultColCss);
+      }
+      const snippet2 = `<section id="cms-${colKey}" data-cms="${colKey}" data-cms-layout="${layout}" style="padding:clamp(40px,6vw,80px) 0"><div style="max-width:1100px;margin:0 auto;padding:0 clamp(16px,5vw,40px)"><h2 style="font-size:clamp(1.4rem,4vw,2rem);font-weight:700;margin-bottom:24px">${col.label}</h2><div data-cms-cards="${colKey}" class="${containerClass}">${gridInner}<span data-cms-end="${colKey}" style="display:none"></span></div></div></section>`;
       editor.setComponents((editor.getHtml() || '') + snippet2);
       setCmsSnippetCol(null);
       setCmsOpen(false);
@@ -1080,25 +1230,31 @@ Design it as a clean, readable article/detail page that showcases one record.`;
     setDeployStatus('saving');
     setDeployError(null);
     setDeployUrl(null);
-    // Save all pages first
+    // Save ALL pages using live GrapesJS state (includes unsaved edits, all pages)
     const pages = site.pages;
     for (const page of pages) {
-      // Use current editor state for active page, stored content for others
       let html: string, css: string;
-      if (page.key === activePage.key) {
-        html = editor.getHtml();
-        css  = editor.getCss() ?? '';
+      const gjsPage = editor.Pages.get(page.key);
+      if (gjsPage) {
+        // Live in-memory content — works even if the page was never explicitly saved
+        const comp = gjsPage.getMainComponent();
+        html = editor.getHtml({ component: comp }) ?? '';
+        css  = editor.getCss({ component: comp }) ?? '';
       } else {
+        // Fallback to storage for any page not in GrapesJS
         const stored = await getPageContent(siteId!, page.key);
         if (!stored) continue;
         html = stored.html;
         css  = stored.css;
       }
+      // Persist to storage and to disk (for dev-server deploy endpoint)
+      await savePageContent(siteId!, page.key, html, css);
+      setSavedPages(prev => ({ ...prev, [page.key]: true }));
       await fetch('/api/save-page', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ siteId, pageKey: page.key, pageLabel: page.label, html, css }),
-      });
+      }).catch(() => {});
     }
     setDeployStatus('deploying');
     try {
@@ -1107,7 +1263,12 @@ Design it as a clean, readable article/detail page that showcases one record.`;
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ siteId, siteName: site.name, vercelToken }),
       });
-      const data = await res.json();
+      // Guard: res.json() throws if body is empty (e.g. middleware crash or Vercel timeout)
+      const rawText = await res.text();
+      let data: any;
+      try { data = JSON.parse(rawText); } catch {
+        data = { error: `Server returned HTTP ${res.status} with non-JSON body: ${rawText.slice(0, 200) || '(empty)'}` };
+      }
       if (!res.ok || !data.ok) {
         setDeployStatus('error');
         setDeployError(data.error ?? 'Deployment failed.');
@@ -1131,6 +1292,12 @@ Design it as a clean, readable article/detail page that showcases one record.`;
     const newPage: SitePage = { key: uniqueKey, label: newPageName.trim(), sourceUrl: newPageUrl.trim() || undefined };
     await addPage(siteId!, newPage);
     setSite(await getSite(siteId!));
+    // Register the new page in GrapesJS Pages (don't select yet — handleSelectPage does that)
+    const editor = editorRef.current;
+    if (editor && !editor.Pages.get(uniqueKey)) {
+      const blankHtml = '<div style="padding:80px 32px;text-align:center;font-family:-apple-system,sans-serif;color:#86868b"><p style="font-size:16px">Drag blocks from the panel on the right to start building.</p></div>';
+      editor.Pages.add({ id: uniqueKey, name: newPage.label, component: blankHtml, styles: '' }, { select: false });
+    }
     setNewPageName(''); setNewPageUrl(''); setAddPageOpen(false);
     handleSelectPage(newPage);
   };
@@ -1142,7 +1309,58 @@ Design it as a clean, readable article/detail page that showcases one record.`;
     await removePage(siteId!, page.key);
     const updated = await getSite(siteId!);
     setSite(updated);
+    // Remove from GrapesJS Pages
+    const editor = editorRef.current;
+    if (editor && editor.Pages.get(page.key)) {
+      editor.Pages.remove(page.key);
+    }
     if (activePage?.key === page.key && updated?.pages[0]) handleSelectPage(updated.pages[0]);
+  };
+
+  // Rename page
+  const handleRenamePage = async (page: SitePage, newLabel: string) => {
+    setRenamingPageKey(null);
+    if (!newLabel.trim() || newLabel.trim() === page.label) return;
+    const label = newLabel.trim();
+    const updatedPages = (site?.pages ?? []).map(p => p.key === page.key ? { ...p, label } : p);
+    await updateSite(siteId!, { pages: updatedPages });
+    const updated = await getSite(siteId!);
+    setSite(updated);
+    // Sync name in GrapesJS Pages
+    const gjsPage = editorRef.current?.Pages.get(page.key);
+    if (gjsPage) gjsPage.set('name', label);
+    if (activePage?.key === page.key) setActivePage({ ...page, label });
+    activePageRef.current = activePage?.key === page.key ? { ...page, label } : activePageRef.current;
+  };
+
+  // Duplicate page
+  const handleDuplicatePage = async (page: SitePage) => {
+    const editor = editorRef.current;
+    const baseLabel = `${page.label} copy`;
+    const baseKey   = slugify(baseLabel);
+    const current   = site?.pages.map(p => p.key) ?? [];
+    let uniqueKey   = baseKey; let i = 2;
+    while (current.includes(uniqueKey)) { uniqueKey = `${baseKey}-${i}`; i++; }
+    // Grab content from GrapesJS (live) or storage
+    let html = '', css = '';
+    const gjsPage = editor?.Pages.get(page.key);
+    if (gjsPage) {
+      const comp = gjsPage.getMainComponent();
+      html = editor!.getHtml({ component: comp }) ?? '';
+      css  = editor!.getCss({ component: comp }) ?? '';
+    } else {
+      const stored = await getPageContent(siteId!, page.key);
+      html = stored?.html ?? ''; css = stored?.css ?? '';
+    }
+    const newPage: SitePage = { key: uniqueKey, label: baseLabel };
+    await addPage(siteId!, newPage);
+    await savePageContent(siteId!, uniqueKey, html, css);
+    setSite(await getSite(siteId!));
+    setSavedPages(prev => ({ ...prev, [uniqueKey]: true }));
+    if (editor && !editor.Pages.get(uniqueKey)) {
+      editor.Pages.add({ id: uniqueKey, name: baseLabel, component: html, styles: css }, { select: false });
+    }
+    handleSelectPage(newPage);
   };
 
   // Claude chat
@@ -1564,6 +1782,12 @@ Always pick ONE format (css or html) — never both.`;
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', flexDirection: 'column', background: lightTheme ? '#e8e8ed' : '#1a1a1a' }}>
 
+      {/* Pages panel hover styles */}
+      <style>{`
+        [data-pages-row]:hover .page-actions { opacity: 1 !important; }
+        [data-pages-row]:hover { background: ${lightTheme ? '#f0f4ff' : '#0d1a2e'} !important; }
+      `}</style>
+
       {/* ── Top toolbar ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 14px', height: 48, flexShrink: 0, background: lightTheme ? '#f5f5f7' : '#111', borderBottom: `1px solid ${lightTheme ? '#d2d2d7' : '#2a2a2a'}` }}>
 
@@ -1579,39 +1803,45 @@ Always pick ONE format (css or html) — never both.`;
         </span>
         <div style={{ width: 1, height: 20, background: lightTheme ? '#d2d2d7' : '#2a2a2a', flexShrink: 0 }} />
 
-        {/* Page tabs */}
+        {/* Pages panel toggle */}
+        <button
+          onClick={() => setPagesOpen(o => !o)}
+          title="Manage pages"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 5,
+            padding: '4px 10px', borderRadius: 9999, fontSize: 12, fontWeight: 600, flexShrink: 0,
+            background: pagesOpen ? '#0066cc' : 'transparent',
+            color: pagesOpen ? '#fff' : (lightTheme ? '#555' : '#888'),
+            border: `1px solid ${pagesOpen ? '#0066cc' : (lightTheme ? '#c7c7cc' : '#333')}`,
+            cursor: 'pointer',
+          }}
+        >
+          <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+            <rect x="2" y="2" width="5" height="6" rx="1"/><rect x="9" y="2" width="5" height="6" rx="1"/>
+            <rect x="2" y="10" width="5" height="4" rx="1"/><rect x="9" y="10" width="5" height="4" rx="1"/>
+          </svg>
+          Pages
+          <span style={{ fontSize: 10, opacity: 0.7 }}>({pages.length})</span>
+        </button>
+
+        {/* Current page pill */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 3, overflowX: 'auto', flex: 1, minWidth: 0 }}>
           {pages.map(p => (
-            <div key={p.key} style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
-              <button
-                onClick={() => handleSelectPage(p)}
-                style={{
-                  padding: '4px 10px', borderRadius: 9999, fontSize: 12,
-                  fontWeight: activePage?.key === p.key ? 600 : 400,
-                  background: activePage?.key === p.key ? '#0066cc' : 'transparent',
-                  color: activePage?.key === p.key ? '#fff' : '#888',
-                  border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
-                }}
-              >
-                {p.label}
-                {savedPages[p.key] && <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#4ade80', flexShrink: 0 }} />}
-              </button>
-              {pages.length > 1 && (
-                <button
-                  onClick={() => handleDeletePage(p)}
-                  title="Remove page"
-                  style={{ fontSize: 10, color: '#444', background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', lineHeight: 1 }}
-                >×</button>
-              )}
-            </div>
+            <button
+              key={p.key}
+              onClick={() => handleSelectPage(p)}
+              style={{
+                padding: '4px 10px', borderRadius: 9999, fontSize: 12, flexShrink: 0,
+                fontWeight: activePage?.key === p.key ? 600 : 400,
+                background: activePage?.key === p.key ? '#0066cc' : 'transparent',
+                color: activePage?.key === p.key ? '#fff' : (lightTheme ? '#86868b' : '#555'),
+                border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+              }}
+            >
+              {p.label}
+              {savedPages[p.key] && <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#4ade80', flexShrink: 0 }} />}
+            </button>
           ))}
-          <button
-            onClick={() => setAddPageOpen(true)}
-            title="Add page"
-            style={{ padding: '4px 8px', borderRadius: 9999, fontSize: 11, background: 'transparent', color: '#555', border: '1px dashed #333', cursor: 'pointer', flexShrink: 0 }}
-          >
-            + Page
-          </button>
         </div>
 
         {/* Status */}
@@ -1677,25 +1907,63 @@ Always pick ONE format (css or html) — never both.`;
             CMS record links ({colKey}/{slug}.html) are replaced with per-record Blob URLs
             so clicking a card actually opens the record page. */}
         <button
-          onClick={() => {
+          onClick={async () => {
             const editor = editorRef.current;
-            if (!editor || !activePage) return;
-            const html = editor.getHtml();
-            const css  = editor.getCss() ?? '';
-            let full = `<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>${activePage.label}</title>\n<style>\n${css}\n</style>\n</head>\n<body>\n${html}\n</body>\n</html>`;
-            // Replace every CMS record link with a Blob URL of that record's page
-            for (const [colKey, col] of Object.entries(cmsData.collections)) {
-              for (const record of col.records) {
-                const base2 = (record[col.fields[0]?.key ?? ''] || '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 30);
-                const slug = (base2 ? `${base2}-` : '') + record.id;
-                const template   = col.recordTemplate || defaultRecordTemplate(col);
-                const recordHtml = renderWithTokens(template, { ...record, _cover: record._cover ?? '' }, col.fields);
-                const recordUrl  = URL.createObjectURL(new Blob([recordHtml], { type: 'text/html' }));
-                // Covers both href="…" and onclick="location.href='…'" (table layout)
-                full = full.split(`${colKey}/${slug}.html`).join(recordUrl);
+            if (!editor || !activePage || !site) return;
+
+            // Helper: build a full standalone HTML string for a page
+            const buildHtml = (label: string, bodyHtml: string, pageCss: string) =>
+              `<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>${label}</title>\n<style>\n${pageCss}\n</style>\n</head>\n<body>\n${bodyHtml}\n</body>\n</html>`;
+
+            // Step 1: Collect HTML for every page in the site
+            // Use GrapesJS Pages API (in-memory, includes unsaved edits) with storage fallback
+            const pageHtmls: Record<string, { label: string; html: string }> = {};
+            for (const page of site.pages) {
+              let bodyHtml: string, pageCss: string;
+              const gjsPage = editor.Pages.get(page.key);
+              if (gjsPage) {
+                const comp = gjsPage.getMainComponent();
+                bodyHtml = editor.getHtml({ component: comp }) ?? '';
+                pageCss  = editor.getCss({ component: comp }) ?? '';
+              } else {
+                // Fallback: page not in editor (shouldn't normally happen)
+                const stored = await getPageContent(siteId!, page.key);
+                bodyHtml = stored?.html ?? '<p style="padding:40px;font-family:sans-serif;color:#86868b">This page has no saved content yet.</p>';
+                pageCss  = stored?.css ?? '';
               }
+              pageHtmls[page.key] = { label: page.label, html: buildHtml(page.label, bodyHtml, pageCss) };
             }
-            const url = URL.createObjectURL(new Blob([full], { type: 'text/html' }));
+
+            // Step 2: Replace CMS record links in every page's HTML
+            const replaceCmsLinks = (full: string) => {
+              for (const [colKey, col] of Object.entries(cmsData.collections)) {
+                for (const record of col.records) {
+                  const base2 = (record[col.fields[0]?.key ?? ''] || '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 30);
+                  const slug = (base2 ? `${base2}-` : '') + record.id;
+                  const template  = col.recordTemplate || defaultRecordTemplate(col);
+                  const recHtml   = renderWithTokens(template, { ...record, _cover: record._cover ?? '' }, col.fields);
+                  const recUrl    = URL.createObjectURL(new Blob([recHtml], { type: 'text/html' }));
+                  full = full.split(`${colKey}/${slug}.html`).join(recUrl);
+                }
+              }
+              return full;
+            };
+
+            // Step 3: Pass-1 blobs — create a blob for each page to obtain its URL
+            const pass1Urls: Record<string, string> = {};
+            for (const [key, { html }] of Object.entries(pageHtmls)) {
+              pass1Urls[key] = URL.createObjectURL(new Blob([replaceCmsLinks(html)], { type: 'text/html' }));
+            }
+
+            // Step 4: Inject a navigation script into each page that maps page keys → pass-1 blob URLs.
+            // Handles href="./menu.html", href="/menu", href="menu" etc.
+            // homeKey: the key used for the root "/" — first page key (usually "home")
+            const homeKey = site.pages[0]?.key ?? 'home';
+            const navScript = `<script>(function(){var n=${JSON.stringify(pass1Urls)};var home=${JSON.stringify(homeKey)};document.addEventListener('click',function(e){var a=e.target&&e.target.closest?e.target.closest('a[href]'):null;if(!a)return;var h=a.getAttribute('href')||'';if(!h||h.startsWith('#')||h.startsWith('http')||h.startsWith('//'))return;e.preventDefault();var s=h.replace(/^[.\\/]+/,'').replace(/\\.html?$/i,'').toLowerCase()||home;if(n[s])window.location.href=n[s];},true);})();<\/script>`;
+
+            // Step 5: Open current page with nav script injected
+            const currentHtml = replaceCmsLinks(pageHtmls[activePage.key].html).replace('</body>', navScript + '\n</body>');
+            const url = URL.createObjectURL(new Blob([currentHtml], { type: 'text/html' }));
             window.open(url, '_blank');
           }}
           disabled={status !== 'ready'}
@@ -1859,6 +2127,187 @@ Always pick ONE format (css or html) — never both.`;
         </div>
       )}
 
+      {/* ── Pages panel (left) ── */}
+      {pagesOpen && (
+        <div
+          data-light-panel={lightTheme || undefined}
+          style={{
+            position: 'absolute', left: 0, top: 48, bottom: 0, width: 260,
+            background: lightTheme ? '#fff' : '#111',
+            borderRight: `1px solid ${lightTheme ? '#d2d2d7' : '#2a2a2a'}`,
+            display: 'flex', flexDirection: 'column', zIndex: 20,
+          }}
+        >
+          {/* Header */}
+          <div style={{ padding: '10px 14px', borderBottom: `1px solid ${lightTheme ? '#d2d2d7' : '#2a2a2a'}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+            <span style={{ color: lightTheme ? '#1d1d1f' : '#0099ff', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <rect x="2" y="2" width="5" height="6" rx="1"/><rect x="9" y="2" width="5" height="6" rx="1"/>
+                <rect x="2" y="10" width="5" height="4" rx="1"/><rect x="9" y="10" width="5" height="4" rx="1"/>
+              </svg>
+              Pages
+            </span>
+            <button onClick={() => setPagesOpen(false)} style={{ color: lightTheme ? '#888' : '#555', background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, lineHeight: 1 }}>×</button>
+          </div>
+
+          {/* Page list */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+            {pages.map(p => {
+              const isActive   = activePage?.key === p.key;
+              const isRenaming = renamingPageKey === p.key;
+              return (
+                <div
+                  key={p.key}
+                  data-pages-row
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    padding: '7px 12px',
+                    background: isActive ? (lightTheme ? '#e8f0fe' : '#0a1628') : 'transparent',
+                    borderLeft: `2px solid ${isActive ? '#0066cc' : 'transparent'}`,
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => { if (!isRenaming) handleSelectPage(p); }}
+                >
+                  {/* Page icon */}
+                  <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke={isActive ? '#0066cc' : (lightTheme ? '#86868b' : '#555')} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                    <path d="M4 2h5l3 3v9H4V2z"/><path d="M9 2v3h3"/>
+                  </svg>
+
+                  {/* Name or rename input */}
+                  {isRenaming ? (
+                    <input
+                      autoFocus
+                      value={renameInputVal}
+                      onChange={e => setRenameInputVal(e.target.value)}
+                      onBlur={() => handleRenamePage(p, renameInputVal)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') handleRenamePage(p, renameInputVal);
+                        if (e.key === 'Escape') setRenamingPageKey(null);
+                        e.stopPropagation();
+                      }}
+                      style={{
+                        flex: 1, minWidth: 0,
+                        background: lightTheme ? '#fff' : '#1a1a1a',
+                        border: `1px solid ${lightTheme ? '#0066cc' : '#0066cc'}`,
+                        borderRadius: 5, padding: '2px 6px',
+                        color: lightTheme ? '#1d1d1f' : '#ccc', fontSize: 12, outline: 'none',
+                      }}
+                      onClick={e => e.stopPropagation()}
+                    />
+                  ) : (
+                    <span
+                      style={{
+                        flex: 1, minWidth: 0, fontSize: 12,
+                        fontWeight: isActive ? 600 : 400,
+                        color: isActive ? '#0066cc' : (lightTheme ? '#1d1d1f' : '#aaa'),
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}
+                      onDoubleClick={e => {
+                        e.stopPropagation();
+                        setRenamingPageKey(p.key);
+                        setRenameInputVal(p.label);
+                      }}
+                      title="Double-click to rename"
+                    >
+                      {p.label}
+                    </span>
+                  )}
+
+                  {/* Saved dot */}
+                  {savedPages[p.key] && !isRenaming && (
+                    <span title="Saved" style={{ width: 5, height: 5, borderRadius: '50%', background: '#4ade80', flexShrink: 0 }} />
+                  )}
+
+                  {/* Action buttons — show on hover via parent group */}
+                  {!isRenaming && (
+                    <div
+                      className="page-actions"
+                      style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, opacity: 0 }}
+                      onClick={e => e.stopPropagation()}
+                    >
+                      {/* Copy link */}
+                      <button
+                        title={`Copy page link: ${p.key === 'home' || p.key === 'index' ? '/' : `/${p.key}`}`}
+                        onClick={e => {
+                          e.stopPropagation();
+                          const link = (p.key === 'home' || p.key === 'index') ? '/' : `/${p.key}`;
+                          navigator.clipboard.writeText(link).catch(() => {});
+                        }}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: lightTheme ? '#86868b' : '#555', borderRadius: 4, fontSize: 10, lineHeight: 1, fontFamily: 'monospace' }}
+                      >🔗</button>
+                      {/* Rename */}
+                      <button
+                        title="Rename"
+                        onClick={e => { e.stopPropagation(); setRenamingPageKey(p.key); setRenameInputVal(p.label); }}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 3px', color: lightTheme ? '#86868b' : '#555', borderRadius: 4, fontSize: 11, lineHeight: 1 }}
+                      >✎</button>
+                      {/* Duplicate */}
+                      <button
+                        title="Duplicate page"
+                        onClick={e => { e.stopPropagation(); handleDuplicatePage(p); }}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 3px', color: lightTheme ? '#86868b' : '#555', borderRadius: 4, fontSize: 11, lineHeight: 1 }}
+                      >⧉</button>
+                      {/* Delete */}
+                      {pages.length > 1 && (
+                        <button
+                          title="Delete page"
+                          onClick={e => { e.stopPropagation(); handleDeletePage(p); }}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 3px', color: '#f87171', borderRadius: 4, fontSize: 12, lineHeight: 1 }}
+                        >×</button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Link format guide */}
+          <div style={{ padding: '10px 12px', borderTop: `1px solid ${lightTheme ? '#e8e8ed' : '#1a1a1a'}`, flexShrink: 0, background: lightTheme ? '#f9f9fb' : '#0a0a0a' }}>
+            <p style={{ fontSize: 10, color: lightTheme ? '#86868b' : '#555', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Link to a page</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              {pages.map(p => {
+                const link = (p.key === 'home' || p.key === 'index') ? '/' : `/${p.key}`;
+                return (
+                  <div key={p.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                    <span style={{ fontSize: 10, color: lightTheme ? '#86868b' : '#555', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{p.label}</span>
+                    <button
+                      title="Click to copy"
+                      onClick={() => navigator.clipboard.writeText(link).catch(() => {})}
+                      style={{
+                        fontFamily: 'monospace', fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                        background: lightTheme ? '#e8e8ed' : '#1a1a1a',
+                        color: lightTheme ? '#0066cc' : '#4da3ff',
+                        border: `1px solid ${lightTheme ? '#d2d2d7' : '#2a2a2a'}`,
+                        cursor: 'pointer', flexShrink: 0,
+                      }}
+                    >{link}</button>
+                  </div>
+                );
+              })}
+            </div>
+            <p style={{ fontSize: 9, color: lightTheme ? '#999' : '#444', marginTop: 6, lineHeight: 1.5 }}>
+              Use these as <code style={{ background: lightTheme ? '#e8e8ed' : '#1a1a1a', padding: '1px 3px', borderRadius: 3 }}>href</code> values on any link or button. Works in canvas, preview, and deployed site.
+            </p>
+          </div>
+
+          {/* Footer — Add Page */}
+          <div style={{ padding: '10px 12px', borderTop: `1px solid ${lightTheme ? '#d2d2d7' : '#2a2a2a'}`, flexShrink: 0 }}>
+            <button
+              onClick={() => setAddPageOpen(true)}
+              style={{
+                width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                padding: '8px 0', borderRadius: 9999, fontSize: 12, fontWeight: 600,
+                background: '#0066cc', color: '#fff', border: 'none', cursor: 'pointer',
+              }}
+            >
+              <span style={{ fontSize: 16, lineHeight: 1 }}>+</span>
+              Add Page
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── History panel (left) ── */}
       {historyOpen && (
         <div style={{ position: 'absolute', left: 0, top: 48, bottom: 0, width: 280, background: '#111', borderRight: '1px solid #2a2a2a', display: 'flex', flexDirection: 'column', zIndex: 20 }}>
@@ -1953,7 +2402,7 @@ Always pick ONE format (css or html) — never both.`;
         <div data-light-panel={lightTheme || undefined} style={{ position: 'absolute', left: 0, top: 48, bottom: 0, width: cmsView === 'table' || cmsView === 'record-template' ? 480 : 360, background: lightTheme ? '#fff' : '#111', borderRight: `1px solid ${lightTheme ? '#d2d2d7' : '#2a2a2a'}`, display: 'flex', flexDirection: 'column', zIndex: 20, overflowY: 'auto' }}>
 
           {/* Header */}
-          <div style={{ padding: '12px 16px', borderBottom: '1px solid #2a2a2a', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+          <div style={{ padding: '12px 16px', borderBottom: `1px solid ${ck.bd1}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               {cmsView !== 'list' && (
                 <button onClick={() => {
@@ -1964,12 +2413,25 @@ Always pick ONE format (css or html) — never both.`;
               )}
               <span style={{ color: '#7c3aed', fontSize: 13, fontWeight: 700 }}>⊞ CMS</span>
               {activeCol && cmsView !== 'list' && (
-                <span style={{ color: '#555', fontSize: 11 }}>/ {cmsData.collections[activeCol]?.label}</span>
+                <span style={{ color: ck.tx3, fontSize: 11 }}>/ {cmsData.collections[activeCol]?.label}</span>
               )}
-              {cmsView === 'schema' && <span style={{ color: '#555', fontSize: 11 }}>/ Schema</span>}
+              {cmsView === 'schema' && <span style={{ color: ck.tx3, fontSize: 11 }}>/ Schema</span>}
               {cmsView === 'record-template' && <span style={{ color: '#f59e0b', fontSize: 11 }}>/ 📄 Record Page</span>}
             </div>
-            <button onClick={() => setCmsOpen(false)} style={{ color: '#555', background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, lineHeight: 1 }}>×</button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button
+                onClick={async () => {
+                  const data = await getCmsData(siteId!);
+                  setCmsData(data);
+                  for (const colKey of Object.keys(data.collections)) {
+                    refreshCmsSectionOnPage(colKey, data);
+                  }
+                }}
+                title="Re-fetch CMS data and refresh page (picks up external Supabase changes)"
+                style={{ background: 'none', border: `1px solid ${ck.bd1}`, borderRadius: 6, color: ck.tx3, cursor: 'pointer', fontSize: 11, padding: '2px 7px', lineHeight: 1.4 }}
+              >↺</button>
+              <button onClick={() => setCmsOpen(false)} style={{ color: ck.tx3, background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, lineHeight: 1 }}>×</button>
+            </div>
           </div>
 
           {/* ── Collections list ── */}
@@ -1986,7 +2448,7 @@ Always pick ONE format (css or html) — never both.`;
                   </div>
                   <div style={{ display: 'flex', gap: 6 }}>
                     <button onClick={() => { setActiveCol(key); setCmsView('table'); }} style={{ padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, background: '#7c3aed', color: '#fff', border: 'none', cursor: 'pointer' }}>Open</button>
-                    <button onClick={() => cmsDeleteCollection(key)} style={{ padding: '4px 8px', borderRadius: 6, fontSize: 11, background: 'transparent', color: '#555', border: '1px solid #333', cursor: 'pointer' }}>✕</button>
+                    <button onClick={() => cmsDeleteCollection(key)} style={{ padding: '4px 8px', borderRadius: 6, fontSize: 11, background: 'transparent', color: ck.tx3, border: `1px solid ${ck.bd1}`, cursor: 'pointer' }}>✕</button>
                   </div>
                 </div>
               ))}
@@ -1999,7 +2461,7 @@ Always pick ONE format (css or html) — never both.`;
                   placeholder="Collection name (e.g. Blog Posts)"
                   style={{ width: '100%', background: ck.bg2, border: `1px solid ${ck.bd1}`, borderRadius: 6, padding: '7px 10px', color: ck.tx1, fontSize: 12, outline: 'none', boxSizing: 'border-box', marginBottom: 10 }}
                 />
-                <p style={{ color: '#555', fontSize: 11, marginBottom: 6 }}>Fields</p>
+                <p style={{ color: ck.tx2, fontSize: 11, marginBottom: 6 }}>Fields</p>
                 {newColFields.map((f, i) => (
                   <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
                     <input value={f.label} onChange={e => setNewColFields(prev => prev.map((x, j) => j === i ? { ...x, label: e.target.value, key: cmsSlug(e.target.value) || x.key } : x))}
@@ -2016,7 +2478,7 @@ Always pick ONE format (css or html) — never both.`;
                 <button onClick={() => setNewColFields(prev => [...prev, { key: `field${prev.length+1}`, label: `Field ${prev.length+1}`, type: 'text' }])}
                   style={{ fontSize: 11, color: '#7c3aed', background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginBottom: 10 }}>+ Add field</button>
                 <button onClick={cmsCreateCollection} disabled={!newColName.trim()}
-                  style={{ width: '100%', background: newColName.trim() ? '#7c3aed' : '#1a1a2e', color: newColName.trim() ? '#fff' : '#444', border: 'none', borderRadius: 9999, padding: '8px 0', fontSize: 12, fontWeight: 600, cursor: newColName.trim() ? 'pointer' : 'not-allowed' }}>
+                  style={{ width: '100%', background: newColName.trim() ? '#7c3aed' : ck.bg2, color: newColName.trim() ? '#fff' : ck.tx3, border: `1px solid ${newColName.trim() ? '#7c3aed' : ck.bd1}`, borderRadius: 9999, padding: '8px 0', fontSize: 12, fontWeight: 600, cursor: newColName.trim() ? 'pointer' : 'not-allowed' }}>
                   Create Collection
                 </button>
               </div>
@@ -2031,16 +2493,13 @@ Always pick ONE format (css or html) — never both.`;
             return (
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                 {/* Toolbar */}
-                <div style={{ padding: '8px 12px', borderBottom: '1px solid #2a2a2a', display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap' }}>
+                <div style={{ padding: '8px 12px', borderBottom: `1px solid ${ck.bd1}`, display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap' }}>
                   <button onClick={() => cmsAddRecord(activeCol)}
                     style={{ padding: '5px 12px', background: '#7c3aed', color: '#fff', border: 'none', borderRadius: 9999, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>+ Row</button>
                   <button onClick={() => { setSchemaFields(col.fields); setCmsView('schema'); }}
-                    style={{ padding: '5px 12px', background: 'transparent', color: '#888', border: '1px solid #333', borderRadius: 9999, fontSize: 11, cursor: 'pointer' }}>⚙ Schema</button>
+                    style={{ padding: '5px 12px', background: 'transparent', color: ck.tx2, border: `1px solid ${ck.bd1}`, borderRadius: 9999, fontSize: 11, cursor: 'pointer' }}>⚙ Schema</button>
                   <button onClick={() => setCmsSnippetCol(cmsSnippetCol === activeCol ? null : activeCol)}
                     style={{ padding: '5px 12px', background: 'transparent', color: '#7c3aed', border: '1px solid #7c3aed', borderRadius: 9999, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{'</>'} Insert</button>
-                  <button onClick={() => enterTemplateMode(activeCol)}
-                    title="Open card template in the canvas — drag-and-drop, Claude AI, and code all available"
-                    style={{ padding: '5px 12px', background: 'transparent', color: '#f59e0b', border: '1px solid #f59e0b', borderRadius: 9999, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>🎨 Design</button>
                   <button onClick={() => { enterRecordTemplateMode(activeCol); setCmsOpen(false); }}
                     title="Open the record page template in the canvas"
                     style={{ padding: '5px 12px', background: 'transparent', color: '#a78bfa', border: '1px solid #a78bfa', borderRadius: 9999, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>📄 Record</button>
@@ -2051,12 +2510,12 @@ Always pick ONE format (css or html) — never both.`;
 
                 {/* Snippet layout picker */}
                 {cmsSnippetCol === activeCol && (
-                  <div style={{ padding: '10px 12px', background: '#0a0a1a', borderBottom: '1px solid #2a2a2a', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <p style={{ color: '#666', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Layout</p>
+                  <div style={{ padding: '10px 12px', background: ck.bg3, borderBottom: `1px solid ${ck.bd1}`, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <p style={{ color: ck.tx3, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Layout</p>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5 }}>
                       {(['grid','list','cards','table'] as const).map(lay => (
                         <button key={lay} onClick={() => setCmsInsertLayout(lay)}
-                          style={{ padding: '5px 4px', fontSize: 11, borderRadius: 7, border: `1px solid ${cmsInsertLayout === lay ? '#7c3aed' : '#2a2a2a'}`, background: cmsInsertLayout === lay ? '#2d1b69' : '#111', color: cmsInsertLayout === lay ? '#c4b5fd' : '#666', cursor: 'pointer', fontWeight: 600 }}>
+                          style={{ padding: '5px 4px', fontSize: 11, borderRadius: 7, border: `1px solid ${cmsInsertLayout === lay ? '#7c3aed' : ck.bd1}`, background: cmsInsertLayout === lay ? (lightTheme ? '#ede9fe' : '#2d1b69') : ck.bg2, color: cmsInsertLayout === lay ? '#7c3aed' : ck.tx2, cursor: 'pointer', fontWeight: 600 }}>
                           {lay === 'grid' ? '▦ Grid' : lay === 'list' ? '☰ List' : lay === 'cards' ? '▬ Cards' : '⊟ Table'}
                         </button>
                       ))}
@@ -2074,7 +2533,7 @@ Always pick ONE format (css or html) — never both.`;
                   {col.fields.map(f => (
                     <div key={f.key} style={{ ...cellStyle, width: COL_W, fontWeight: 700, color: ck.tx2, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', flexShrink: 0 }}>
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.label}</span>
-                      <span style={{ color: '#333', marginLeft: 4, fontSize: 9 }}>{f.type}</span>
+                      <span style={{ color: ck.tx3, marginLeft: 4, fontSize: 9 }}>{f.type}</span>
                     </div>
                   ))}
                   <div style={{ ...cellStyle, width: 76, minWidth: 76 }} />
@@ -2083,7 +2542,7 @@ Always pick ONE format (css or html) — never both.`;
                 {/* Rows */}
                 <div style={{ flex: 1, overflowY: 'auto', overflowX: 'auto' }}>
                   {col.records.length === 0 && (
-                    <div style={{ padding: '20px 16px', color: '#444', fontSize: 12 }}>No records yet. Click + Row to add one.</div>
+                    <div style={{ padding: '20px 16px', color: ck.tx3, fontSize: 12 }}>No records yet. Click + Row to add one.</div>
                   )}
                   {col.records.map((record, idx) => (
                     <div key={record.id} style={{ display: 'flex', borderBottom: `1px solid ${ck.bd2}`, background: ck.bg1 }}
@@ -2092,9 +2551,9 @@ Always pick ONE format (css or html) — never both.`;
                       {/* Row handle */}
                       <div style={{ ...cellStyle, width: 28, minWidth: 28, flexDirection: 'column', gap: 0, cursor: 'pointer' }}>
                         <button onClick={() => cmsReorderRecord(activeCol, record.id, -1)} disabled={idx === 0}
-                          style={{ background: 'none', border: 'none', color: idx === 0 ? '#2a2a2a' : '#555', cursor: idx === 0 ? 'default' : 'pointer', fontSize: 8, padding: 0, lineHeight: 1 }}>▲</button>
+                          style={{ background: 'none', border: 'none', color: idx === 0 ? ck.bd1 : ck.tx3, cursor: idx === 0 ? 'default' : 'pointer', fontSize: 8, padding: 0, lineHeight: 1 }}>▲</button>
                         <button onClick={() => cmsReorderRecord(activeCol, record.id, 1)} disabled={idx === col.records.length - 1}
-                          style={{ background: 'none', border: 'none', color: idx === col.records.length - 1 ? '#2a2a2a' : '#555', cursor: idx === col.records.length - 1 ? 'default' : 'pointer', fontSize: 8, padding: 0, lineHeight: 1 }}>▼</button>
+                          style={{ background: 'none', border: 'none', color: idx === col.records.length - 1 ? ck.bd1 : ck.tx3, cursor: idx === col.records.length - 1 ? 'default' : 'pointer', fontSize: 8, padding: 0, lineHeight: 1 }}>▼</button>
                       </div>
                       {/* Cells */}
                       {col.fields.map(field => {
@@ -2128,18 +2587,18 @@ Always pick ONE format (css or html) — never both.`;
                                   if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
                                   if (e.key === 'Escape') setEditingCell(null);
                                 }}
-                                style={{ width: '100%', background: 'transparent', border: 'none', outline: '1px solid #7c3aed', borderRadius: 3, padding: '2px 4px', color: '#ddd', fontSize: 12 }}
+                                style={{ width: '100%', background: 'transparent', border: 'none', outline: '1px solid #7c3aed', borderRadius: 3, padding: '2px 4px', color: ck.tx1, fontSize: 12 }}
                               />
                             ) : field.type === 'image-url' ? (
                               val
                                 ? <img src={val} alt="" style={{ height: 28, width: 44, objectFit: 'cover', borderRadius: 4 }} />
                                 : <span style={{ color: '#333', fontSize: 11 }}>—</span>
                             ) : field.type === 'textarea' ? (
-                              <span style={{ color: val ? '#9ca3af' : '#333', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block', width: '100%' }}>
+                              <span style={{ color: val ? ck.tx2 : ck.tx3, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block', width: '100%' }}>
                                 {val ? '✏ ' + val.slice(0, 30) + (val.length > 30 ? '…' : '') : '✏ click to edit'}
                               </span>
                             ) : (
-                              <span style={{ color: val ? '#ddd' : '#333', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block', width: '100%' }}>
+                              <span style={{ color: val ? ck.tx1 : ck.tx3, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block', width: '100%' }}>
                                 {val || '—'}
                               </span>
                             )}
@@ -2159,7 +2618,7 @@ Always pick ONE format (css or html) — never both.`;
                   ))}
                   {/* Add row button inline */}
                   <button onClick={() => cmsAddRecord(activeCol)}
-                    style={{ width: '100%', padding: '8px 16px', background: 'transparent', border: 'none', borderTop: '1px solid #1a1a1a', color: '#444', fontSize: 11, cursor: 'pointer', textAlign: 'left' }}>
+                    style={{ width: '100%', padding: '8px 16px', background: 'transparent', border: 'none', borderTop: `1px solid ${ck.bd2}`, color: ck.tx3, fontSize: 11, cursor: 'pointer', textAlign: 'left' }}>
                     + Add row
                   </button>
                 </div>
@@ -2192,7 +2651,7 @@ Always pick ONE format (css or html) — never both.`;
                 <button onClick={() => cmsSaveSchema(activeCol)}
                   style={{ flex: 1, background: '#7c3aed', color: '#fff', border: 'none', borderRadius: 9999, padding: '8px 0', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Save schema</button>
                 <button onClick={() => setCmsView('table')}
-                  style={{ padding: '8px 14px', background: 'transparent', color: '#666', border: '1px solid #333', borderRadius: 9999, fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+                  style={{ padding: '8px 14px', background: 'transparent', color: ck.tx2, border: `1px solid ${ck.bd1}`, borderRadius: 9999, fontSize: 12, cursor: 'pointer' }}>Cancel</button>
               </div>
             </div>
           )}

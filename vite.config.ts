@@ -137,11 +137,15 @@ ${html}
                 }),
               });
 
-              const deployData = await deployRes.json();
+              const rawText = await deployRes.text();
+              let deployData: any;
+              try { deployData = JSON.parse(rawText); } catch {
+                deployData = { error: `Vercel HTTP ${deployRes.status} — ${rawText.slice(0, 300) || 'empty response'}` };
+              }
               if (!deployRes.ok) {
                 res.statusCode = deployRes.status;
                 res.setHeader('Content-Type', 'application/json');
-                return res.end(JSON.stringify({ error: deployData.error?.message ?? 'Vercel deployment failed.' }));
+                return res.end(JSON.stringify({ error: deployData.error?.message ?? deployData.error ?? `Vercel HTTP ${deployRes.status}` }));
               }
 
               const url = deployData.url ? `https://${deployData.url}` : null;
