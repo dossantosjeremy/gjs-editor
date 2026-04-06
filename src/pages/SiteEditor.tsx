@@ -476,6 +476,38 @@ export const SiteEditor: React.FC = () => {
     bm.add('list-items', { label: 'List',       category: 'Collections', media: icon('<line x1="9" y1="6" x2="20" y2="6"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="18" x2="20" y2="18"/><circle cx="4" cy="6" r="1.5" fill="currentColor"/><circle cx="4" cy="12" r="1.5" fill="currentColor"/><circle cx="4" cy="18" r="1.5" fill="currentColor"/>'), content: '<ul style="list-style:none;padding:0;margin:0">' + ['Item one','Item two','Item three'].map(t => `<li style="display:flex;gap:12px;align-items:flex-start;padding:12px 0;border-bottom:1px solid #d2d2d7"><span style="width:8px;height:8px;border-radius:50%;background:#0066cc;flex-shrink:0;margin-top:6px"></span><span style="color:#1d1d1f">${t}</span></li>`).join('') + '</ul>' });
     bm.add('stats',      { label: 'Stats',      category: 'Collections', media: icon('<path d="M3 20h18M3 20V10l6-4 4 4 5-6v16"/>'), content: '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:24px;padding:48px 32px">' + [['98%','Satisfaction'],['2× faster','Delivery'],['40+','Projects']].map(([v,l]) => `<div style="text-align:center;background:#f5f5f7;border-radius:16px;padding:24px"><p style="font-size:2rem;font-weight:700;color:#0066cc;margin-bottom:4px">${v}</p><p style="font-size:13px;color:#86868b">${l}</p></div>`).join('') + '</div>' });
 
+    // ── Device switcher buttons in GrapesJS pn-options panel ─────────────
+    const deviceIcon = (path: string) =>
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
+
+    editor.Commands.add('set-device-Desktop', { run: (ed: any) => ed.setDevice('Desktop'), stop: () => {} });
+    editor.Commands.add('set-device-Tablet',  { run: (ed: any) => ed.setDevice('Tablet'),  stop: () => {} });
+    editor.Commands.add('set-device-Mobile',  { run: (ed: any) => ed.setDevice('Mobile'),  stop: () => {} });
+
+    editor.Panels.addButton('options', {
+      id: 'device-desktop', label: deviceIcon('<rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>'),
+      command: 'set-device-Desktop', active: true, togglable: false,
+      attributes: { title: 'Desktop' },
+    });
+    editor.Panels.addButton('options', {
+      id: 'device-tablet', label: deviceIcon('<rect x="4" y="2" width="16" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>'),
+      command: 'set-device-Tablet', togglable: false,
+      attributes: { title: 'Tablet' },
+    });
+    editor.Panels.addButton('options', {
+      id: 'device-mobile', label: deviceIcon('<rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>'),
+      command: 'set-device-Mobile', togglable: false,
+      attributes: { title: 'Mobile' },
+    });
+
+    // Keep active state in sync when device changes externally
+    editor.on('device:select', (device: any) => {
+      ['device-desktop', 'device-tablet', 'device-mobile'].forEach(id => {
+        const btn = editor.Panels.getButton('options', id);
+        if (btn) btn.set('active', id.replace('device-', '') === device.get('name').toLowerCase());
+      });
+    });
+
     // ── Eagerly populate all pages via GrapesJS Pages API ────────────────
     (async () => {
       // Remove any default page GrapesJS auto-created
