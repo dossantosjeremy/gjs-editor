@@ -477,16 +477,18 @@ export const SiteEditor: React.FC = () => {
     bm.add('stats',      { label: 'Stats',      category: 'Collections', media: icon('<path d="M3 20h18M3 20V10l6-4 4 4 5-6v16"/>'), content: '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:24px;padding:48px 32px">' + [['98%','Satisfaction'],['2× faster','Delivery'],['40+','Projects']].map(([v,l]) => `<div style="text-align:center;background:#f5f5f7;border-radius:16px;padding:24px"><p style="font-size:2rem;font-weight:700;color:#0066cc;margin-bottom:4px">${v}</p><p style="font-size:13px;color:#86868b">${l}</p></div>`).join('') + '</div>' });
 
     // ── Native GrapesJS device dropdown ──────────────────────────────────
-    // The devices-c panel is normally created lazily by the open-sm command.
-    // Explicitly create it here so it is always present on first render,
-    // including in the Vite production build served from Vercel.
-    editor.on('load', () => {
-      if (!editor.Panels.getPanel('devices-c')) {
-        const devPanel = editor.Panels.addPanel({ id: 'devices-c' });
-        const devView  = editor.DeviceManager.render();
-        devPanel.set('appendContent', devView).trigger('change:appendContent');
-      }
-    });
+    // devices-c is created lazily by open-sm; ensure it exists on first paint.
+    const ensureDevicePanel = () => {
+      if (editor.Panels.getPanel('devices-c')) return;
+      const devPanel = editor.Panels.addPanel({ id: 'devices-c' });
+      const devView  = (editor as any).DeviceManager.render();
+      devPanel.set('appendContent', devView).trigger('change:appendContent');
+    };
+    // Try immediately (works when panels are already rendered)
+    ensureDevicePanel();
+    // Retry after canvas iframe loads (catches production / Vercel timing)
+    editor.on('canvas:frame:load', ensureDevicePanel);
+    editor.on('load', ensureDevicePanel);
 
     // ── Eagerly populate all pages via GrapesJS Pages API ────────────────
     (async () => {
